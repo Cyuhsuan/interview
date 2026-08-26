@@ -2,7 +2,7 @@
 
 ## 文件狀態
 
-本文件是待核准規格，尚未實作 Go 程式碼、migration、table 或 seeder。「必須」表示可驗證規則；未決定的產品設定集中列於「待診所確認」，不得在 production 使用隱性預設值。
+本文件是已核准的後端基準 contract。「必須」表示可驗證規則；未決定的產品設定集中列於「待診所確認」，不得在 production 使用隱性預設值。尚缺的實作級 contract 集中列於「後端實作前待釐清」。
 
 ## 架構決策
 
@@ -149,7 +149,7 @@ Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 servi
 | `verified_at` | `timestamptz` | Nullable |
 | `created_at`, `updated_at` | `timestamptz` | Default database current time |
 
-(`professional_id`, `provider`) 必須 unique。每位啟用的 professional 必須同時具有一筆啟用且已驗證的 Google mapping，以及一筆啟用且已驗證的 Microsoft mapping。OAuth token、client secret 與 private key 不得存於 table、seed 或 repository，必須由受管理 secret system 持有。Mapping 或 provider 暫時不可用不影響 PostgreSQL 預約判定；同步由 outbox retry 與 reconciliation 處理。
+(`professional_id`, `provider`) 必須 unique。開始接受預約前，每位啟用的 professional 必須同時具有一筆啟用且已驗證的 Google mapping，以及一筆啟用且已驗證的 Microsoft mapping。OAuth token、client secret 與 private key 不得存於 table、seed 或 repository，必須由受管理 secret system 持有。Mapping 或 provider 暫時不可用不影響 PostgreSQL 預約判定；同步由 outbox retry 與 reconciliation 處理。
 
 ## Reference-data Seeder
 
@@ -216,7 +216,7 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 
 ## Calendar Adapter Contract
 
-Provider-neutral ports 只負責將 PostgreSQL appointment 投影至外部系統，至少支援 `Create`、`Update`、health、retry classification 與 reconciliation；不得以 `Busy` 查詢結果判定 availability，第一版也不提供 `Cancel`。
+Provider-neutral ports 只負責將 PostgreSQL appointment 投影至外部系統，第一版支援 `Create`、health、retry classification 與 reconciliation；不提供 `Busy`、`Update` 或 `Cancel`。
 
 Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不預設共用同一 OAuth flow。各 provider 必須使用 least-privilege access，並記錄 credential owner、rotation、revocation、reauthorization 與 tenant/calendar access boundary。
 
@@ -234,9 +234,9 @@ Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不�
 3. Outbox retry interval、最大次數、`dead_letter` 告警對象與人工處理 SLA。
 4. Session 過期時間、availability 查詢範圍、rate-limit 數值與資料 retention/deletion 週期。
 
-## 進入實作階段後待釐清
+## 後端實作前待釐清
 
-下列技術細節可在進入開發階段後細化，但必須在實作相關功能前寫入本 contract 並完成審閱：
+下列技術細節必須在加入相關後端程式碼前寫入本 contract 並完成審閱：
 
 1. BookingSession、Appointment、outbox、idempotency、audit 與 `seed_history` 的完整 production schema。
 2. 各 API endpoint 的 request/response schema、必填欄位與完整 status/error mapping。

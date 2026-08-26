@@ -4,7 +4,7 @@
 
 建立一套僅使用英文、可為牙科診所三位專業人員安排預約的客服聊天機器人。後續實作將使用 Go 建置後端，並使用 React 建置前端。
 
-本 repository 目前處於文件階段。在使用者明確啟動實作階段之前，不得加入應用程式碼、套件清單、產生檔、部署設定或任何依賴。
+產品文件基準已完成。目前先補齊 API contract 與 production 資料模型，再依交付順序進入應用程式實作。
 
 ## Repository 邊界
 
@@ -22,7 +22,7 @@
 - 服務 C 需 150 分鐘，僅可由 Senior 1 或 Senior 2 執行。
 - 服務 D 需 120 分鐘，僅可由 Senior 1 或 Senior 2 執行。
 - 服務 E 需 360 分鐘，僅可由 Senior 1 或 Senior 2 執行。
-- Bot 可以安排預約，但不得診斷、開立處方、提供緊急醫療建議、報價、處理保險，或在未驗證身分的情況下取消預約。
+- Bot 可以安排預約，但不得診斷、開立處方、提供緊急醫療建議、報價或處理保險。第一版不得取消或改期預約；相關要求必須轉接診所。
 - 可預約時間只以 PostgreSQL 中的服務時間、專業人員資格、診所營業時間、內部保留時段與已確認預約判斷；Google Calendar 與 Outlook 不得作為 availability 輸入。
 - 在患者正式確認前，必須再次從 PostgreSQL 檢查可預約狀態。
 - 若無法從 PostgreSQL 驗證即時可預約狀態，系統必須採 fail-closed，並引導患者聯絡診所。
@@ -30,12 +30,11 @@
 
 ## 交付順序
 
-1. 審閱並核准文件。
-2. 定義 API contract 與 production 資料模型。
-3. 實作並驗證 Go 後端。
-4. 實作並驗證 React 前端。
-5. 連接 Google 與 Microsoft sandbox tenant。
-6. 上線前完成安全、隱私、負載、復原及診所驗收檢查。
+1. 定義 API contract 與 production 資料模型。
+2. 實作並驗證 Go 後端。
+3. 實作並驗證 React 前端。
+4. 連接 Google 與 Microsoft sandbox tenant。
+5. 上線前完成安全、隱私、負載、復原及診所驗收檢查。
 
 ## 文件標準
 

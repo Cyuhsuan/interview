@@ -1,8 +1,8 @@
 # 前端作業規範
 
-本文件適用於未來所有位於 `frontend/` 下的檔案。
+本文件適用於 `frontend/` 下所有檔案。
 
-## 未來實作 contract
+## 實作 contract
 
 - 使用 React 與 TypeScript。
 - 患者端文案必須使用簡明英文。

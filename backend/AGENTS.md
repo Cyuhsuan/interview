@@ -1,6 +1,6 @@
 # 後端作業規範
 
-本文件適用於 `backend/`。Repository 仍在文件階段；使用者未明確啟動實作前，只能修改文件。
+本文件適用於 `backend/`。實作特定功能前，必須先完成 `backend/README.md` 中對應的待釐清 contract。
 
 ## Contract
 

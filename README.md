@@ -1,22 +1,22 @@
 # 牙科預約客服 Bot
 
-這是一份採文件優先的英文牙科預約聊天機器人規格。目前階段刻意不包含任何應用程式碼。
+產品文件基準已完成；專案目前進入 API contract 與 production data model 階段。
 
 ## 產品摘要
 
-患者可透過文字或語音選擇標準牙科服務、尋找具備資格且有足夠空檔的專業人員，並確認預約。系統會同時檢查 Google Calendar 與 Outlook，並在確認後將活動寫入兩個系統。AI 負責理解自然語言；服務資格、所需時間、可預約狀態與預約安全性則由後端規則控制。
+患者可透過文字或語音選擇標準牙科服務、尋找具備資格且有足夠空檔的專業人員，並確認預約。系統只以 PostgreSQL 判斷 availability，確認後再將活動非同步寫入 Google Calendar 與 Outlook。AI 負責理解自然語言；服務資格、所需時間與預約合法性由後端規則控制。
 
 ## 診所模型
 
-| 代碼 | 暫定服務名稱 | 時間 | 可執行人員 |
+| 代碼 | 英文服務名稱 | 時間 | 可執行人員 |
 |---|---|---:|---|
-| A | 定期檢查與洗牙 | 1 小時 | Junior、Senior 1、Senior 2 |
-| B | 牙齒美白諮詢 | 1 小時 | Junior、Senior 1、Senior 2 |
-| C | 根管治療 | 2.5 小時 | Senior 1、Senior 2 |
-| D | 牙冠製備 | 2 小時 | Senior 1、Senior 2 |
-| E | 全口重建 | 6 小時 | Senior 1、Senior 2 |
+| A | Service A | 60 分鐘 | Junior、Senior 1、Senior 2 |
+| B | Service B | 60 分鐘 | Junior、Senior 1、Senior 2 |
+| C | Service C | 150 分鐘 | Senior 1、Senior 2 |
+| D | Service D | 120 分鐘 | Senior 1、Senior 2 |
+| E | Service E | 360 分鐘 | Senior 1、Senior 2 |
 
-以上名稱為工作用暫定名稱，開始實作前需由診所確認。初步規劃假設營業時間為週一至週五 09:00–17:00、使用單一診所時區，且預約每 30 分鐘可開始一次。
+以上名稱、時長與資格為固定值。診所時區、營業時間、假日、休息時段、slot interval 與最短提前預約時間尚待診所確認，不得使用隱性預設值。
 
 ## 範圍
 
@@ -27,14 +27,14 @@
 - 英文文字對話。
 - 瀏覽器語音輸入與語音回覆，並永久保留文字輸入作為 fallback。
 - 不綁定特定供應商的 AI 意圖與欄位擷取。
-- 雙向整合 Google Calendar 與 Outlook：讀取忙碌時段並建立活動。
+- 將 PostgreSQL 中已確認的預約非同步投影至 Google Calendar 與 Outlook，不讀取外部忙碌時段。
 - 清楚的服務範圍界線與安全的診所轉接機制。
-- Production 架構、成本、維護、安全、安裝與使用文件。
+- Production 架構、安全、維運與使用文件。
 
 第一版不包含：
 
 - 診斷、檢傷、處方、緊急醫療、保險、治療報價或付款。
-- 未驗證身分的自動取消或改期。
+- 任何自動取消或改期；相關要求由診所人工處理。
 - 電話/PSTN channel、多語言或牙科診所管理系統整合。
 - 除非另行核准，否則不包含員工管理後台。
 
@@ -42,24 +42,22 @@
 
 - [前端產品與客戶指南](frontend/README.md)：患者體驗、語音行為、介面狀態、無障礙、安裝前置條件與診所驗收。
 - [前端實作規範](frontend/AGENTS.md)：後續 React 階段的限制與品質要求。
-- [後端架構與內部指南](backend/README.md)：架構、預約 contract、Calendar/AI 邊界、安全、production 工作、成本與維護。
+- [後端架構與內部指南](backend/README.md)：架構、預約 contract、Calendar/AI 邊界、安全與 production 維運。
 - [後端實作規範](backend/AGENTS.md)：後續 Go 階段的限制與驗證要求。
 
 ## 建議交付階段
 
 | 階段 | 交付內容 | 完成條件 |
 |---|---|---|
-| 1 — 文件 | 本 repository 中的六份 Markdown 文件 | 診所規則、服務名稱、營業時間、安全假設及預算均獲核准。 |
+| 1 — Contract | 完整 API schema、production data model 與 Calendar delivery mapping | 跨層 contract 已審閱，可據以實作與測試。 |
 | 2 — 後端 | Go API、domain 測試、資料持久化、AI 與 Calendar adapter | 服務資格、時間、衝突、失敗情境及範圍界線測試通過。 |
 | 3 — 前端 | React 文字/語音應用程式 | 響應式、鍵盤、螢幕閱讀器、文字輸入及支援瀏覽器的語音檢查通過。 |
-| 4 — 整合 | Google 與 Microsoft sandbox 連線 | 忙碌活動會移除時段；確認預約時，每個 provider 僅建立一筆具冪等性的活動。 |
+| 4 — 整合 | Google 與 Microsoft sandbox 連線 | 每筆已確認預約在各 provider 最多建立一個活動；同步失敗不改變預約狀態。 |
 | 5 — Production | 受管理的基礎設施、OAuth、可觀測性、隱私與復原控制 | 通過安全審查、還原測試、診所驗收與 release checklist。 |
 
-## Phase 2 前必須決定的事項
+## 實作前必須決定的事項
 
-1. 核准或替換五個暫定服務名稱。
-2. 確認診所時區、營業時間、假日、休息時段及最短提前預約時間。
-3. 決定 Google Calendar 與 Outlook 資料不一致時，以何者為準。
-4. 確認每位專業人員是否在兩個 provider 中都有獨立行事曆。
-5. 選擇 production AI provider，以及適用的健康資料與隱私協議。
-6. 定義取消、改期、資料保留、緊急情況與員工支援政策。
+1. 確認診所時區、營業時間、假日、休息時段、slot interval 與最短提前預約時間。
+2. 確認 Google／Microsoft 授權模式、tenant 權限與 credential storage；每位啟用的專業人員必須同時具有兩個 provider 的獨立 mapping。
+3. 選擇 production AI provider，以及適用的健康資料與隱私協議。
+4. 定義資料 retention/deletion、緊急情況、取消／改期轉接與員工支援政策。
