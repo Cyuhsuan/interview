@@ -1,206 +1,230 @@
-# 後端內部架構指南
+# 後端架構與 Contract
 
-## 建議架構
+## 文件狀態
 
-初期採用 modular Go monolith，而非 microservices。預約是一個高度重視一致性的流程；對單一診所而言，單一可部署服務更容易進行 transaction、監控、安全管理與維護。透過明確介面，未來仍可在需要時拆分元件。
+本文件是待核准規格，尚未實作 Go 程式碼、migration、table 或 seeder。「必須」表示可驗證規則；未決定的產品設定集中列於「待診所確認」，不得在 production 使用隱性預設值。
+
+## 架構決策
+
+後端採 modular Go monolith 與 PostgreSQL。PostgreSQL 是預約、人員、服務、同步任務與 audit state 的唯一事實來源；Google Calendar 與 Microsoft Outlook 只是外部 projection。
+
+AI 只能擷取 intent 與欄位候選值。服務資格、時長、狀態轉換、availability 與最終預約判定必須由確定性 domain code 完成。
+
+### DDD 目錄規劃
 
 ```text
-React client
-    |
-HTTPS JSON API
-    |
-Go application
-    +-- conversation state machine
-    +-- AI intent/value extractor interface
-    +-- deterministic scheduling domain
-    +-- transactional appointment repository
-    +-- durable calendar outbox
-    +-- Google Calendar adapter
-    `-- Microsoft Graph adapter
-             |
-      PostgreSQL + worker
+backend/
+├── cmd/
+│   ├── api/                    # HTTP API composition root
+│   ├── calendar-worker/        # outbox delivery worker
+│   └── migrate/                # migration/seed command
+├── internal/
+│   ├── catalog/                # Service and Professional
+│   │   ├── domain/
+│   │   ├── application/        # use cases and owned ports
+│   │   └── adapters/
+│   ├── scheduling/             # availability and interval rules
+│   │   ├── domain/
+│   │   ├── application/
+│   │   └── adapters/
+│   ├── booking/                # BookingSession and Appointment
+│   │   ├── domain/
+│   │   ├── application/
+│   │   └── adapters/
+│   ├── conversation/           # English-only flow and AI boundary
+│   ├── calendar/               # delivery and reconciliation
+│   ├── platform/               # HTTP, PostgreSQL, config, telemetry
+│   └── shared/                 # approved shared value types only
+├── migrations/
+├── seeds/
+├── test/
+│   ├── contract/
+│   └── integration/
+└── README.md
 ```
 
-## Domain 責任
+`domain` 不得 import HTTP、SQL、AI SDK 或 Calendar SDK。介面由使用它的 `application` package 擁有，`adapters` 依賴並實作該介面。Context 間只傳遞 command、query 或已定義 value object，不共用 ORM model。`shared` 的內容必須至少被兩個 context 共用，且語意完全一致。
 
-後端負責：
+| Context | 責任 | 不負責 |
+|---|---|---|
+| Catalog | 服務、人員與明確服務資格 | Availability 與 Calendar 呼叫 |
+| Scheduling | 營業規則、內部時段、外部 busy interval 與 availability | 建立 appointment |
+| Booking | Session、最終確認、防重疊與 outbox transaction | 直接呼叫 Calendar SDK |
+| Conversation | 英文對話、範圍邊界與 AI 候選值 | 核准預約 |
+| Calendar | Outbox delivery、retry 與 reconciliation | 改變 appointment domain state |
 
-- 服務清單及所需時間。
-- 專業人員能力與資格。
-- 營業時間、假日、休息時段、最短提前預約時間及 slot interval。
-- 內部保留時段與外部忙碌時段。
-- 最終可預約判定及衝突檢查。
-- 確認、預約參考 ID、idempotency、audit record 及 Calendar delivery state。
-- 對話服務範圍及安全拒絕類別。
+Availability 是 Scheduling domain service；Calendar event 是 Appointment 的外部 projection。
 
-AI extractor 只產生 intent、service、date、time、name 與 email 候選值。所有值及預約合法性都由確定性的後端規則驗證。
+## Canonical Types
 
-## RESTful API contract
+### ID
 
-目前是待核准的文件規格，尚未實作。Base path 為 `/api/v1`，使用 HTTPS、UTF-8 JSON、RFC 3339 時間及不透明 ID。錯誤使用 `application/problem+json`。
+- Aggregate/entity ID 與指向 entity 的 foreign key 一律使用 UUID v4。純 join table 可使用由 UUID foreign keys 組成的 composite primary key；`seed_history` 與 idempotency 等技術 table 使用本文明確定義的 natural key。
+- UUID 由 application 透過可注入、使用 CSPRNG 的 `IDGenerator` 產生；禁止 sequential integer、語意 slug 與 nil UUID。
+- PostgreSQL 使用 `uuid`；API 使用 RFC 9562 lowercase hyphenated UUID string。ID 建立後不得變更、重用或轉移。
+- 不另建 `public_id`。`code` 是 immutable business key，不可代替 ID，且必須符合 `^[A-Z][A-Z0-9_]{0,31}$`。
 
-### Endpoints
+### 時間與區間
+
+- Production 必須設定有效 IANA clinic timezone；缺少或無效時 API 不得啟動。
+- Instant 儲存為 PostgreSQL `timestamptz`，database connection timezone 固定 UTC，精度上限為 microseconds。
+- API instant 使用 RFC 3339。Availability/appointment 時間必須含當時診所 UTC offset，並同時回傳 IANA `timeZone`。
+- API `date` 使用 `YYYY-MM-DD` 並以 clinic timezone 解讀。時段一律使用 `[start, end)` 半開區間。
+- `created_at` 與 `updated_at` 由 PostgreSQL 產生；`updated_at` 只在資料實際變更時更新。
+
+### Version 與 Idempotency
+
+- Aggregate `version` 使用 positive `bigint`，初始值 `1`，每次持久化的 domain state 變更原子遞增 `1`。
+- API 以強 ETag 傳遞 version，格式為 `ETag: "3"`。修改 session 與建立 appointment 必須提供 `If-Match`；缺少時回傳 `428 PRECONDITION_REQUIRED`，不符時回傳 `412 SESSION_VERSION_MISMATCH`。Body 不重複傳送 version。
+- `POST /appointments` 必須提供 `Idempotency-Key`：16–128 個 ASCII 字元，只允許英數字、`.`、`_`、`:` 與 `-`。
+- Idempotency scope 為 method + route + public/authenticated session，retention 為 24 小時。同 key 與同 canonical request hash 回傳原 status/body；同 key 但不同 hash 回傳 `409 IDEMPOTENCY_KEY_REUSED`。併發同 key 只能有一筆 appointment。
+
+## PostgreSQL-first 預約一致性
+
+所有寫入一律先修改 PostgreSQL，成功 commit 後才能同步至外部系統。API request transaction 內不得呼叫 Google Calendar 或 Microsoft Graph 寫入 API。
+
+1. 驗證 session、`If-Match`、`Idempotency-Key` 與患者輸入。
+2. 讀取 PostgreSQL 內部時段，並重新讀取 Google 與 Microsoft busy intervals。任一必要 provider 無法驗證時回傳 `503 CALENDAR_AVAILABILITY_UNAVAILABLE`，不寫入 appointment。
+3. 在單一 PostgreSQL transaction 再驗證 domain rules，建立 appointment、idempotency record、audit record 與 Google/Microsoft 各一筆 outbox record。
+4. Commit 成功後 appointment 立即為已確認的內部事實，API 回傳 `201 Created` 與 `calendarDelivery=queued`。
+5. Worker 先在 PostgreSQL transaction 鎖定 outbox row、將狀態改為 `processing` 並 commit，再使用 appointment ID + provider 派生的穩定 idempotency key 寫入外部 Calendar。外部呼叫完成後，必須將 delivery result 與 event reference 寫回 PostgreSQL。
+6. 外部寫入失敗不得 rollback 或刪除 appointment；必須 retry，窮盡後進入 `dead_letter` 並告警人工處理。
+
+### 防止重疊與狀態
+
+- Appointment 必須儲存 `professional_id`、`start_at`、`end_at` 與 status，且 `start_at < end_at`。
+- PostgreSQL 必須使用 exclusion constraint，禁止同一 `professional_id` 的 `confirmed` appointment 重疊 `tstzrange(start_at, end_at, '[)')`。Constraint conflict 映射為 `409 SLOT_NO_LONGER_AVAILABLE`。
+- BookingSession：`collecting`、`readyToConfirm`、`confirmed`、`expired`。只允許 `collecting → readyToConfirm`、`readyToConfirm → collecting|confirmed` 與任一未終止狀態 `→ expired`；`confirmed` 與 `expired` 是 terminal state。
+- Appointment：`confirmed`、`cancelled`；第一版不提供患者端 cancellation transition。
+- Provider outbox：`pending`、`processing`、`retryable`、`delivered`、`dead_letter`。
+- API `calendarDelivery`：`queued`、`partial`、`delivered`、`attentionRequired`。兩方都成功才是 `delivered`；一方成功為 `partial`；任一方 `dead_letter` 為 `attentionRequired`。
+
+## Catalog Production Data Model
+
+欄位除非標示 nullable，否則必須 `NOT NULL`。Constraint 必須在 PostgreSQL 建立，不可只依賴 Go validation。
+
+### `services`
+
+| Column | Type | Constraint |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(32)` | Unique immutable business key |
+| `display_name` | `varchar(100)` | Trim 後 1–100 Unicode code points |
+| `duration_minutes` | `smallint` | `> 0` |
+| `is_active` | `boolean` | Default `true` |
+| `created_at`, `updated_at` | `timestamptz` | Default database current time |
+
+### `professionals`
+
+| Column | Type | Constraint |
+|---|---|---|
+| `id` | `uuid` | Primary key；API 使用此 ID |
+| `code` | `varchar(32)` | Unique immutable business key |
+| `display_name` | `varchar(100)` | Trim 後 1–100 Unicode code points；核准的英文名稱 |
+| `is_active` | `boolean` | Default `true`；`false` 時不產生新 availability |
+| `created_at`, `updated_at` | `timestamptz` | Default database current time |
+
+`Professional` 不儲存 `level`。服務資格只來自明確關聯，不得從 code 或 display name 推導。Professional 不得 hard delete；停用不得改變既有 appointment。
+
+### `professional_service_qualifications`
+
+| Column | Type | Constraint |
+|---|---|---|
+| `professional_id` | `uuid` | FK → `professionals.id ON DELETE RESTRICT` |
+| `service_id` | `uuid` | FK → `services.id ON DELETE RESTRICT` |
+| `created_at` | `timestamptz` | Default database current time |
+
+Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 service-code array。移除資格前必須確認沒有相關未來 appointment。
+
+### `professional_calendars`
+
+| Column | Type | Constraint |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `professional_id` | `uuid` | FK → `professionals.id ON DELETE RESTRICT` |
+| `provider` | `varchar(16)` | Check: `google` or `microsoft` |
+| `calendar_ref_ciphertext` | `bytea` | Application-layer encrypted reference |
+| `encryption_key_id` | `varchar(128)` | Managed-key identifier；不是 key material |
+| `is_active` | `boolean` | Default `true` |
+| `verified_at` | `timestamptz` | Nullable |
+| `created_at`, `updated_at` | `timestamptz` | Default database current time |
+
+(`professional_id`, `provider`) 必須 unique。OAuth token、client secret 與 private key 不得存於 table、seed 或 repository，必須由受管理 secret system 持有。Provider 未設定、未驗證或不可用時 fail-closed。
+
+## Reference-data Seeder
+
+Seeder 是受權限的明確維運指令，不得在 API startup 自動執行。
+
+| Professional code | Display name | Qualifications |
+|---|---|---|
+| `JUNIOR` | `Junior` | A、B |
+| `SENIOR_1` | `Senior 1` | A、B、C、D、E |
+| `SENIOR_2` | `Senior 2` | A、B、C、D、E |
+
+Seeder 先驗證 A=60、B=60、C=150、D=120、E=360 分鐘。任一服務不存在、重複或 duration 不符時，整個 transaction rollback。
+
+1. Seed artifact 具有 immutable version 與 SHA-256 checksum；成功紀錄寫入 `seed_history(version, checksum, executed_at, executor_id)`，`version` 為 primary key。相同 version/checksum 已存在時成功 no-op；相同 version 但 checksum 不同時 fail。
+2. 以 `code` 查找人員。不存在時產生 UUID 並 insert；已存在時只驗證靜態欄位，不覆寫、不重新啟用，差異時 fail。
+3. 只 insert 缺少的 12 筆 qualification；不自動刪除額外人員或資格。資料變更使用新版本 artifact。
+4. 驗證、insert 與 `seed_history` 寫入在單一 PostgreSQL transaction 完成。
+5. Calendar mapping、email、demo ID 與 credential 不得出現於 seed。
+
+驗收涵蓋首次/重複執行、checksum/靜態欄位衝突、rollback、FK/unique constraint、12 筆資格組合與停用人員。
+
+## RESTful API Contract
+
+Base path 為 `/api/v1`，只接受 HTTPS UTF-8 JSON。Request body 上限 64 KiB；name 為 trim 後 1–100 Unicode code points，email 最長 254 ASCII characters，message 最長 2,000 Unicode code points。
 
 | Method | Path | 用途 |
 |---|---|---|
-| `GET` | `/services` | 取得 A–E 服務、時間及資格規則。 |
-| `GET` | `/professionals?serviceCode=C` | 取得可執行指定服務的人員。 |
-| `GET` | `/availability?serviceCode=C&date=2026-09-02` | 取得匿名化可預約時段。 |
-| `POST` | `/booking-sessions` | 建立短期預約 session。 |
-| `GET` | `/booking-sessions/{id}` | 恢復 session。 |
-| `PATCH` | `/booking-sessions/{id}` | 更新服務、日期、時段、姓名或 email。 |
-| `POST` | `/booking-sessions/{id}/messages` | 傳送英文患者訊息並取得 Bot 回覆。 |
-| `POST` | `/appointments` | 再次檢查 availability 並建立預約。 |
+| `GET` | `/services` | 取得啟用服務 |
+| `GET` | `/professionals?serviceCode=C` | 取得合格且啟用的人員 |
+| `GET` | `/availability?serviceCode=C&date=2026-09-02` | 取得匿名時段 |
+| `POST` | `/booking-sessions` | 建立短期 session |
+| `GET` | `/booking-sessions/{id}` | 取得 session |
+| `PATCH` | `/booking-sessions/{id}` | 使用 `If-Match` 更新 session |
+| `POST` | `/booking-sessions/{id}/messages` | 傳送英文患者訊息 |
+| `POST` | `/appointments` | 使用 `If-Match` 與 `Idempotency-Key` 確認預約 |
 
-第一版不提供患者端 appointment list、取消或改期 API。這些功能必須等身分驗證方案完成後才加入。
+Appointment body 只含 UUID `bookingSessionId`，不包含 version。Booking session 的 `selectedSlot` 必須含 UUID `professionalId`、RFC 3339 `start`/`end` 與 IANA `timeZone`。
 
-### 主要資料
+Public session 使用 `Secure; HttpOnly; SameSite=Strict` cookie、CSRF token 與 non-empty exact-origin allowlist。Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限回傳 `429` 與 `Retry-After`。第一版不提供 appointment list、取消或改期 API。
 
-Booking session：
+### Error Contract
 
-```json
-{
-  "id": "bs_01J6...",
-  "version": 3,
-  "status": "readyToConfirm",
-  "serviceCode": "C",
-  "selectedSlot": {
-    "professionalId": "senior-1",
-    "start": "2026-09-02T09:30:00-04:00"
-  },
-  "patient": {
-    "name": "Taylor Morgan",
-    "email": "taylor@example.com"
-  }
-}
-```
+錯誤使用 `application/problem+json`，必須含 `type`、`title`、`status`、`code`、`detail` 與 request-scoped `instance`；欄位錯誤可含 `errors[]` 的 `field` 與 `code`。`detail` 必須是安全的簡明英文，不得包含 stack trace、SQL、患者資料、token 或 provider response。
 
-建立 appointment：
+| HTTP | Code |
+|---:|---|
+| `400` | `INVALID_REQUEST` |
+| `409` | `SLOT_NO_LONGER_AVAILABLE` / `IDEMPOTENCY_KEY_REUSED` |
+| `410` | `BOOKING_SESSION_EXPIRED` |
+| `412` | `SESSION_VERSION_MISMATCH` |
+| `413` | `REQUEST_TOO_LARGE` |
+| `422` | `VALIDATION_FAILED` |
+| `428` | `PRECONDITION_REQUIRED` |
+| `429` | `RATE_LIMITED` |
+| `503` | `CALENDAR_AVAILABILITY_UNAVAILABLE` |
 
-```http
-POST /api/v1/appointments
-Idempotency-Key: unique-client-generated-value
-```
+## Calendar Adapter Contract
 
-```json
-{
-  "bookingSessionId": "bs_01J6...",
-  "sessionVersion": 3
-}
-```
+Provider-neutral ports 至少支援 `Busy`、`Create`、`Update`、`Cancel`、health、retry classification 與 reconciliation。`Cancel` 只能在未來核准 cancellation domain flow 後使用。
 
-成功回傳 `201 Created`、預約參考 ID、服務、人員、開始/結束時間及 `calendarDelivery`。`calendarDelivery=queued` 表示已建立內部預約，Google 與 Outlook event 仍由 outbox worker 傳送。
+Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不預設共用同一 OAuth flow。各 provider 必須使用 least-privilege access，並記錄 credential owner、rotation、revocation、reauthorization 與 tenant/calendar access boundary。
 
-### 核心規則
+## 安全與維運底線
 
-- Availability 必須同時檢查內部預約、Google Calendar 與 Outlook；任一必要 provider 無法驗證時回傳 `503`，不得猜測。
-- `POST /appointments` 必須再次檢查 availability，並在 database transaction 中防止重複預約。
-- `POST /appointments` 必須使用 `Idempotency-Key`；重試不得建立第二筆預約或 Calendar event。
-- Session update 使用 version/`If-Match` 防止 stale write；版本不符回傳 `412`。
-- Public session 使用 `Secure; HttpOnly; SameSite=Strict` cookie、CSRF token、精確 Origin 檢查及 rate limit。
-- API 不回傳其他患者資料、Calendar event body、provider token 或 AI credential。
+- Production 必須有 TLS、受管理 secrets、加密 storage/backup、point-in-time recovery、員工 SSO/RBAC 與 audit trail。
+- Log、trace、metric 與 alert 不得包含患者訊息、姓名、email、token、Calendar reference 明文或 provider response body。Audit 只使用 entity ID、action、actor ID 與 timestamp。
+- 處理患者資料前必須完成適用的隱私/健康資料審查與 vendor agreement。
+- 每日監控 outbox backlog、`dead_letter`、provider health 與預約衝突；每季進行 access review、backup restore 與 provider outage drill。
 
-### 錯誤
+規劃基準為 8–12 週、USD 90k–165k。每月 3,000 次對話與 600 筆預約時，純基礎設施約 USD 100–600/月。此為採購前必須重新確認的規劃數字，不是固定報價。
 
-| HTTP | Code | 說明 |
-|---:|---|---|
-| `400` | `INVALID_REQUEST` | JSON 或欄位格式錯誤。 |
-| `409` | `SLOT_NO_LONGER_AVAILABLE` | 時段已被占用。 |
-| `410` | `BOOKING_SESSION_EXPIRED` | Session 已到期。 |
-| `412` | `SESSION_VERSION_MISMATCH` | Client 使用舊版本。 |
-| `422` | `VALIDATION_FAILED` | 違反服務資格、時間或其他 domain rule。 |
-| `429` | `RATE_LIMITED` | 超過限制；附上 `Retry-After`。 |
-| `503` | `CALENDAR_AVAILABILITY_UNAVAILABLE` | 無法安全驗證即時行事曆。 |
+## 待診所確認
 
-錯誤訊息使用對患者安全的英文，不得包含 stack trace、SQL、患者資料、token 或 provider response。
-
-### 確認流程
-
-1. 驗證 session、version、idempotency key 及患者輸入。
-2. 重新讀取 Google 與 Outlook availability。
-3. 在 transaction 中鎖定時段，建立 appointment 及兩筆 outbox record。
-4. 回傳預約參考 ID；worker 負責同步 Calendar、retry 及 reconciliation。
-
-## Calendar 整合
-
-每位專業人員應分別擁有 Google Calendar ID 與 Outlook Calendar ID。Provider adapter 至少支援：
-
-- `Busy(from, to, professionals)`
-- `Create(appointment, idempotencyKey)`
-- `Update(appointment, version)`
-- 核准取消階段後的 `Cancel(appointment, reason)`
-- Health、throttling、token refresh、retry classification 及 reconciliation ID
-
-App 外部的 Google 設定：
-
-1. 建立診所擁有的 Google Cloud project。
-2. 啟用 Google Calendar API。
-3. 設定 OAuth consent screen、verified domain、privacy URL 及 redirect URI。
-4. 僅要求 free/busy 與建立活動所需的最小 Calendar scope。
-5. 若 Google 要求，完成應用程式驗證。
-6. 將每位專業人員的行事曆 delegate/share 給診所身分，並記錄 Calendar ID。
-7. 將 client credential 與加密後的 refresh token 儲存在 production secret system。
-
-App 外部的 Microsoft 設定：
-
-1. 在 Microsoft Entra 中註冊診所擁有的 application。
-2. 設定 redirect URI，以及受管理的 credential 或 certificate。
-3. 申請最小必要的 Microsoft Graph Calendar permission，並取得 administrator consent。
-4. 若 tenant 控制允許，將 mailbox/Calendar access 限制在三位專業人員。
-5. 記錄每個 Outlook Calendar ID，並儲存加密後的 refresh credential。
-
-Google 目前說明，在門檻內的標準 Calendar API 使用不會額外收取 API 費用，並計畫於 2026 年稍晚開始對極高的每日用量計費：[官方 quota 與定價說明](https://developers.google.com/workspace/calendar/api/guides/quota)。Microsoft Graph 會對 Outlook workload 套用 throttling：[官方服務限制](https://learn.microsoft.com/graph/throttling-limits)。
-
-## 安全與隱私計畫
-
-最低 production 控制：
-
-- Edge 使用 TLS；受管理服務間在支援時也使用 TLS。
-- 使用受管理的 PostgreSQL，包含 encryption、backup、point-in-time recovery、migration，以及避免重疊預約的 exclusion/locking protection。
-- 使用受管理 secrets 及 OAuth refresh-token rotation/revocation；不得在 environment file 中存放長效 access token。
-- 資料最小化、明確的保留/刪除政策、患者資料存取流程、regional control，以及適用的健康資料/隱私協議。
-- 營運與 audit tool 使用員工 SSO 及 role-based access。
-- 隨機 opaque ID、idempotency key、input/body limit、exact-origin rule、rate limit、WAF/bot protection 及安全錯誤訊息。
-- Log、trace、metric 與 alert 不得包含患者文字、姓名、email、token 或 provider body。
-- 加密 outbox、audit trail、reconciliation、dependency/SBOM scanning、SAST/DAST、restore drill 及 incident response。
-
-適用 HIPAA、GDPR 或其他健康資料/隱私要求，取決於司法管轄區及診所合約。在處理患者資料前，法律與安全負責人必須核准選用的 cloud、AI、speech、Calendar、telemetry 及 support provider。
-
-## Production 成本預估
-
-假設：單一診所、英文 Web channel、三位專業人員、不含付款及既有牙科系統整合；2026 年綜合工程費率為每小時 USD 120–180。
-
-| 工作項目 | 預估成本 |
-|---|---:|
-| 產品探索、流程、UX 與無障礙 | $10k–$18k |
-| Production Go API、PostgreSQL、預約 concurrency 及 outbox | $24k–$42k |
-| Google/Microsoft OAuth 與 Calendar onboarding | $12k–$22k |
-| React 文字/語音應用程式與 browser QA | $12k–$20k |
-| 安全、隱私、可觀測性、CI/CD、負載及復原 | $20k–$38k |
-| 診所驗收、上線及 contingency | $12k–$25k |
-| **Production 上線總預估** | **約 8–12 週，USD 90k–165k** |
-
-不包含：法律費用、正式認證、第三方滲透測試、vendor BAA 額外費用、電話 channel、診所管理系統整合、資料遷移及 24/7 support。
-
-以下以每月 3,000 次對話及 600 筆完成預約為規劃案例：
-
-| 每月項目 | 精簡方案 | 高可用 production |
-|---|---:|---:|
-| Compute 與 edge | $20 | $120 |
-| 受管理 PostgreSQL 與 backup | $40 | $180 |
-| Queue/cache/outbox worker | $0 | $60 |
-| Monitoring、log、WAF 與 secrets | $25 | $150 |
-| 文字 AI extraction | <$5 | $20 |
-| Domain、email 與其他服務 | $15 | $70 |
-| 工程維護 | $960 | $4,320 |
-| **預估總額** | **約 $1.1k/月** | **約 $4.9k/月** |
-
-在此用量下，單純基礎設施約為每月 $100–$600；工程維護通常是較大的持續成本。AI 成本取決於供應商、prompt、model 及資料保留條款。採購前必須重新確認各部署區域的價格。
-
-## 維護計畫
-
-- 每日：監控預約錯誤、provider health、outbox backlog 及 reconciliation alert。
-- 每週：透過去識別化 telemetry 檢查異常拒絕/fallback 比例及 Calendar failure。
-- 每月：更新 dependency 與 base image、檢查成本/容量、依政策輪替 credential，並抽查診所驗收流程。
-- 每季：檢查 access、執行 backup restore、測試 token revocation/provider outage、審查 AI eval 與 vendor pricing，並確認 retention deletion。
-- 營業時間、服務、model、permission 或 Calendar identity 變更後：重新執行資格、衝突、服務範圍、邀請、無障礙及復原驗收測試。
+1. Clinic IANA timezone、營業時間、假日、休息時段、slot interval 與最短提前預約時間。
+2. A–E 的最終英文顯示名稱。
+3. Google/Microsoft 授權模式、tenant 權限與 credential storage。
+4. Outbox retry interval、最大次數、`dead_letter` 告警對象與人工處理 SLA。
+5. Session 過期時間、availability 查詢範圍、rate-limit 數值與資料 retention/deletion 週期。

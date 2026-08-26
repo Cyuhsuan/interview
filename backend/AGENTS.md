@@ -1,39 +1,35 @@
 # 後端作業規範
 
-本文件適用於未來所有位於 `backend/` 下的檔案。
+本文件適用於 `backend/` 下所有檔案。Repository 目前仍在文件階段；使用者未明確啟動實作前，不得加入 Go 程式碼、migration、seed 檔、套件清單、產生檔、部署設定或依賴。
 
-## 未來實作 contract
+## Source of Truth
 
-- 使用 Go，並讓排程規則獨立於 transport、storage、AI 與 Calendar provider。
-- AI 可以擷取 intent 與欄位值，但不得核准服務、選擇不合資格的人員或確認可預約狀態。
-- Model provider、Google Calendar、Outlook、資料持久化、clock 及 ID generator 都必須具有可測試的介面。
-- 提供時段前及確認流程內，都必須讀取外部忙碌時段。
-- Production 預約必須使用 database transaction 或同等的 concurrency control。
-- Calendar 寫入必須具備冪等性，並透過 durable outbox 傳送及 reconciliation。
-- Live availability 失敗時採 fail-closed；Calendar 寫入失敗必須可觀測且可重試。
-- 絕不得記錄患者訊息、姓名、email、access token、refresh token 或 Calendar response body。
+- `backend/README.md` 是後端架構、canonical types、data model、REST API、PostgreSQL/Calendar 一致性與 seeder 的唯一 contract。
+- 修改 public behavior 時必須同步更新該 contract，不得在本文件複製 endpoint 或 schema 規格。
+- 診所尚未核准的項目必須留在 README 的「待診所確認」，不得在 production 使用隱性預設值。
 
-## API 要求
+## 不可違反的規則
 
-- 實作或修改 API 時，必須遵守並同步更新 `backend/README.md` 中的 RESTful API contract；不得在本文件複製完整 endpoint 規格。
-- 發布前對 public API 進行 versioning。
-- 前端開始實作前，先定義 request、success、error、idempotency、authentication 及 rate-limit 行為。
-- 後端必須驗證 body 大小、訊息長度、日期、email、時區、服務、專業人員及狀態轉換。
-- 回傳穩定的 machine-readable error code，以及對患者安全的簡明英文說明。
-- Availability response 不得洩露其他患者的身分或預約細節。
+- Domain 必須獨立於 HTTP、PostgreSQL、AI 與 Calendar provider；外部依賴一律置於 application-owned interface 之後。
+- AI 只能產生候選 intent/value，不得核准服務、人員資格、availability 或 appointment。
+- PostgreSQL 是唯一事實來源。所有寫入必須先 commit PostgreSQL，再透過 durable outbox 非同步寫入 Google/Microsoft；request transaction 內禁止寫入外部 Calendar。
+- 確認前必須重新讀取 Google 與 Microsoft busy intervals。任一必要 provider 不可用時 fail-closed，不建立 appointment。
+- 外部同步失敗不得回滾、刪除或降級已 commit 的 appointment；必須 retry、reconcile，窮盡後告警人工處理。
+- Appointment 重疊必須由 PostgreSQL exclusion constraint 阻擋，不得只依賴 application pre-check。Appointment、outbox、idempotency record 與 audit record 必須在同一 transaction 建立。
+- UUID、時間、version、ETag、idempotency、status 與 error code 必須遵守 README canonical contract，不得另行發明格式。
+- 不得記錄患者訊息、姓名、email、access/refresh token、Calendar reference 明文或 provider response body。
 
-## 安全要求
+## 變更規則
 
-- 使用 OAuth authorization-code flow、加密 refresh token 及 least-privilege scope。
-- 使用受管理的 secrets、TLS、加密 storage/backup、資料保留與刪除控制、audit trail 及員工 RBAC。
-- Exact-origin policy、request limit、濫用防護、dependency/container scanning 及去識別化 telemetry。
-- 上線前完成適用的隱私與健康資料審查；vendor agreement 必須符合實際傳送的資料。
+- Public API 一律置於 `/api/v1`。Breaking change 必須建立新 API version，不得靜默改變既有 contract。
+- Schema 變更必須使用有序、可審閱的 migration；不得在 API startup 自動 migration 或 seed。
+- Migration 必須考慮既有資料、rollback/forward-fix、lock duration 與 rolling deployment compatibility。產生檔不得手動編輯。
+- Calendar、AI、clock、ID generator 與 repository adapter 必須有 contract test 或 deterministic fake。
 
 ## 交付前必要驗證
 
-- 每種服務/專業人員組合、時間長度、關門邊界、週末/假日、重疊、時區及 daylight-saving transition 的 unit test。
-- 證明兩個同時確認不能預約相同人員與時段的 concurrency test。
-- Google 與 Microsoft sandbox tenant 的 adapter contract test，包含 throttling 與 token expiry。
-- Idempotency、部分 Calendar 失敗、outbox retry 及 reconciliation 測試。
-- API validation、rate limit、authorization、privacy、startup、migration、backup、restore 及 graceful shutdown 檢查。
-- Formatting、static analysis、test、build、final diff 及 secret scan。
+- Unit tests：所有合格與不合格的服務/人員組合、時長、營業邊界、假日、半開區間、timezone 與 DST。
+- PostgreSQL integration tests：重疊 exclusion constraint、兩個併發確認、idempotency、transaction rollback、migration 與 seeder。
+- Adapter contract tests：Google/Microsoft throttling、timeout、token expiry、部分成功、重複 delivery、retry、`dead_letter` 與 reconciliation。
+- API tests：body/field limit、ETag/`If-Match`、error contract、authorization、CSRF/origin、rate limit 與隱私。
+- 交付前必須完成 formatting、static analysis、test、build、migration check、secret scan 與 final diff review；未執行的檢查不得宣稱通過。
