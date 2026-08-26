@@ -15,6 +15,7 @@
 
 ## API 要求
 
+- 實作或修改 API 時，必須遵守並同步更新 `backend/README.md` 中的 RESTful API contract；不得在本文件複製完整 endpoint 規格。
 - 發布前對 public API 進行 versioning。
 - 前端開始實作前，先定義 request、success、error、idempotency、authentication 及 rate-limit 行為。
 - 後端必須驗證 body 大小、訊息長度、日期、email、時區、服務、專業人員及狀態轉換。

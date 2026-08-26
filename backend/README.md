@@ -33,28 +33,93 @@ Go application
 - 確認、預約參考 ID、idempotency、audit record 及 Calendar delivery state。
 - 對話服務範圍及安全拒絕類別。
 
-AI extractor 會回傳 intent、service、date、time、name 與 email 等結構化候選值。所有值都必須由確定性程式碼驗證。若 AI 無法使用或輸出無效，流程必須退回明確提問，不得自行虛構可預約狀態。
+AI extractor 只產生 intent、service、date、time、name 與 email 候選值。所有值及預約合法性都由確定性的後端規則驗證。
 
-## 建議預約 contract
+## RESTful API contract
 
-Phase 2 開始時才會正式核准完整 API。預期能力包括：
+目前是待核准的文件規格，尚未實作。Base path 為 `/api/v1`，使用 HTTPS、UTF-8 JSON、RFC 3339 時間及不透明 ID。錯誤使用 `application/problem+json`。
 
-- 開始或恢復短期 booking session。
-- 提交英文訊息或明確的結構化選項。
-- 在不包含患者身分的情況下查詢可用時段。
-- 預覽暫定選項。
-- 使用 idempotency key 確認預約。
-- 回傳 confirmed、conflict、provider unavailable、validation、rate limit 及 unexpected failure 等結果。
+### Endpoints
 
-確認順序：
+| Method | Path | 用途 |
+|---|---|---|
+| `GET` | `/services` | 取得 A–E 服務、時間及資格規則。 |
+| `GET` | `/professionals?serviceCode=C` | 取得可執行指定服務的人員。 |
+| `GET` | `/availability?serviceCode=C&date=2026-09-02` | 取得匿名化可預約時段。 |
+| `POST` | `/booking-sessions` | 建立短期預約 session。 |
+| `GET` | `/booking-sessions/{id}` | 恢復 session。 |
+| `PATCH` | `/booking-sessions/{id}` | 更新服務、日期、時段、姓名或 email。 |
+| `POST` | `/booking-sessions/{id}/messages` | 傳送英文患者訊息並取得 Bot 回覆。 |
+| `POST` | `/appointments` | 再次檢查 availability 並建立預約。 |
 
-1. 驗證 session、服務、專業人員、患者欄位及要求的開始時間。
-2. 重新取得 Google 與 Outlook 最新的忙碌時段。
-3. 若無法驗證必要的可預約資訊，採 fail-closed。
-4. 在單一 database transaction 中鎖定專業人員/時間範圍，並建立預約與兩筆 outbox record。
-5. 回傳已持久化的預約參考 ID。
-6. Worker 以具冪等性的方式建立 Google 與 Outlook 活動；對 throttling 或 transient failure 進行 backoff retry，並對 terminal failure 發出 alert。
-7. Reconciliation 比對 provider event 與內部狀態。
+第一版不提供患者端 appointment list、取消或改期 API。這些功能必須等身分驗證方案完成後才加入。
+
+### 主要資料
+
+Booking session：
+
+```json
+{
+  "id": "bs_01J6...",
+  "version": 3,
+  "status": "readyToConfirm",
+  "serviceCode": "C",
+  "selectedSlot": {
+    "professionalId": "senior-1",
+    "start": "2026-09-02T09:30:00-04:00"
+  },
+  "patient": {
+    "name": "Taylor Morgan",
+    "email": "taylor@example.com"
+  }
+}
+```
+
+建立 appointment：
+
+```http
+POST /api/v1/appointments
+Idempotency-Key: unique-client-generated-value
+```
+
+```json
+{
+  "bookingSessionId": "bs_01J6...",
+  "sessionVersion": 3
+}
+```
+
+成功回傳 `201 Created`、預約參考 ID、服務、人員、開始/結束時間及 `calendarDelivery`。`calendarDelivery=queued` 表示已建立內部預約，Google 與 Outlook event 仍由 outbox worker 傳送。
+
+### 核心規則
+
+- Availability 必須同時檢查內部預約、Google Calendar 與 Outlook；任一必要 provider 無法驗證時回傳 `503`，不得猜測。
+- `POST /appointments` 必須再次檢查 availability，並在 database transaction 中防止重複預約。
+- `POST /appointments` 必須使用 `Idempotency-Key`；重試不得建立第二筆預約或 Calendar event。
+- Session update 使用 version/`If-Match` 防止 stale write；版本不符回傳 `412`。
+- Public session 使用 `Secure; HttpOnly; SameSite=Strict` cookie、CSRF token、精確 Origin 檢查及 rate limit。
+- API 不回傳其他患者資料、Calendar event body、provider token 或 AI credential。
+
+### 錯誤
+
+| HTTP | Code | 說明 |
+|---:|---|---|
+| `400` | `INVALID_REQUEST` | JSON 或欄位格式錯誤。 |
+| `409` | `SLOT_NO_LONGER_AVAILABLE` | 時段已被占用。 |
+| `410` | `BOOKING_SESSION_EXPIRED` | Session 已到期。 |
+| `412` | `SESSION_VERSION_MISMATCH` | Client 使用舊版本。 |
+| `422` | `VALIDATION_FAILED` | 違反服務資格、時間或其他 domain rule。 |
+| `429` | `RATE_LIMITED` | 超過限制；附上 `Retry-After`。 |
+| `503` | `CALENDAR_AVAILABILITY_UNAVAILABLE` | 無法安全驗證即時行事曆。 |
+
+錯誤訊息使用對患者安全的英文，不得包含 stack trace、SQL、患者資料、token 或 provider response。
+
+### 確認流程
+
+1. 驗證 session、version、idempotency key 及患者輸入。
+2. 重新讀取 Google 與 Outlook availability。
+3. 在 transaction 中鎖定時段，建立 appointment 及兩筆 outbox record。
+4. 回傳預約參考 ID；worker 負責同步 Calendar、retry 及 reconciliation。
 
 ## Calendar 整合
 
