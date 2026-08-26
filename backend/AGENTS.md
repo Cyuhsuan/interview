@@ -1,35 +1,29 @@
 # 後端作業規範
 
-本文件適用於 `backend/` 下所有檔案。Repository 目前仍在文件階段；使用者未明確啟動實作前，不得加入 Go 程式碼、migration、seed 檔、套件清單、產生檔、部署設定或依賴。
+本文件適用於 `backend/`。Repository 仍在文件階段；使用者未明確啟動實作前，只能修改文件。
 
-## Source of Truth
+## Contract
 
-- `backend/README.md` 是後端架構、canonical types、data model、REST API、PostgreSQL/Calendar 一致性與 seeder 的唯一 contract。
-- 修改 public behavior 時必須同步更新該 contract，不得在本文件複製 endpoint 或 schema 規格。
-- 診所尚未核准的項目必須留在 README 的「待診所確認」，不得在 production 使用隱性預設值。
+- `backend/README.md` 是後端架構、資料模型、API 與外部整合的唯一 contract；本文件不複製 endpoint 或 schema。
+- Public behavior 變更必須同步更新 README。未獲診所核准的設定只能列於「待診所確認」，不得以預設值實作。
+- Public API 使用 `/api/v1`；breaking change 必須建立新版本。
 
-## 不可違反的規則
+## 實作限制
 
-- Domain 必須獨立於 HTTP、PostgreSQL、AI 與 Calendar provider；外部依賴一律置於 application-owned interface 之後。
-- AI 只能產生候選 intent/value，不得核准服務、人員資格、availability 或 appointment。
-- PostgreSQL 是唯一事實來源。所有寫入必須先 commit PostgreSQL，再透過 durable outbox 非同步寫入 Google/Microsoft；request transaction 內禁止寫入外部 Calendar。
-- 確認前必須重新讀取 Google 與 Microsoft busy intervals。任一必要 provider 不可用時 fail-closed，不建立 appointment。
-- 外部同步失敗不得回滾、刪除或降級已 commit 的 appointment；必須 retry、reconcile，窮盡後告警人工處理。
-- Appointment 重疊必須由 PostgreSQL exclusion constraint 阻擋，不得只依賴 application pre-check。Appointment、outbox、idempotency record 與 audit record 必須在同一 transaction 建立。
-- UUID、時間、version、ETag、idempotency、status 與 error code 必須遵守 README canonical contract，不得另行發明格式。
-- 不得記錄患者訊息、姓名、email、access/refresh token、Calendar reference 明文或 provider response body。
-
-## 變更規則
-
-- Public API 一律置於 `/api/v1`。Breaking change 必須建立新 API version，不得靜默改變既有 contract。
+- Domain 不得依賴 HTTP、SQL、AI SDK 或 Calendar SDK；外部依賴置於 application-owned interface 後方。
+- AI 只提供 intent/value 候選；資格、時長、availability 與預約合法性由 deterministic domain code 判斷。
+- PostgreSQL 是唯一事實來源；預約、outbox、idempotency 與 audit 必須同一 transaction 寫入，外部 Calendar 寫入只能在 commit 後非同步執行。
+- 最終確認只重新檢查 PostgreSQL；外部 Calendar 不得作為 availability 輸入。已 commit 預約不得因同步失敗而回滾或刪除。
+- 重疊必須由 PostgreSQL exclusion constraint 阻擋，不可只做 application pre-check。
+- UUID、時間、version、ETag、idempotency、status 與 error code 依 README 定義，不得另創格式。
 - Schema 變更必須使用有序、可審閱的 migration；不得在 API startup 自動 migration 或 seed。
-- Migration 必須考慮既有資料、rollback/forward-fix、lock duration 與 rolling deployment compatibility。產生檔不得手動編輯。
+- Migration 必須考慮既有資料、rollback/forward-fix、lock duration 與 rolling deployment compatibility；產生檔不得手動編輯。
 - Calendar、AI、clock、ID generator 與 repository adapter 必須有 contract test 或 deterministic fake。
 
-## 交付前必要驗證
+## 驗證
 
-- Unit tests：所有合格與不合格的服務/人員組合、時長、營業邊界、假日、半開區間、timezone 與 DST。
-- PostgreSQL integration tests：重疊 exclusion constraint、兩個併發確認、idempotency、transaction rollback、migration 與 seeder。
-- Adapter contract tests：Google/Microsoft throttling、timeout、token expiry、部分成功、重複 delivery、retry、`dead_letter` 與 reconciliation。
-- API tests：body/field limit、ETag/`If-Match`、error contract、authorization、CSRF/origin、rate limit 與隱私。
-- 交付前必須完成 formatting、static analysis、test、build、migration check、secret scan 與 final diff review；未執行的檢查不得宣稱通過。
+- Unit：資格、時長、營業邊界、假日、半開區間、timezone 與 DST。
+- PostgreSQL integration：重疊 constraint、併發確認、idempotency、transaction、migration 與 seeder。
+- Adapter contract：throttling、timeout、token expiry、部分成功、重複 delivery、retry、`dead_letter` 與 reconciliation。
+- API：限制、ETag、error contract、authorization、CSRF/origin、rate limit 與隱私。
+- 交付前執行適用的 format、static analysis、test、build、migration check、secret scan 與 final diff review；未執行的檢查不得宣稱通過。
