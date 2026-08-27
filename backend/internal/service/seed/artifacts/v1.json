@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "services": [
+    { "code": "A", "displayName": "Service A", "durationMinutes": 60 },
+    { "code": "B", "displayName": "Service B", "durationMinutes": 60 },
+    { "code": "C", "displayName": "Service C", "durationMinutes": 150 },
+    { "code": "D", "displayName": "Service D", "durationMinutes": 120 },
+    { "code": "E", "displayName": "Service E", "durationMinutes": 360 }
+  ],
+  "professionals": [
+    { "code": "JUNIOR", "displayName": "Junior", "qualifications": ["A", "B"] },
+    { "code": "SENIOR_1", "displayName": "Senior 1", "qualifications": ["A", "B", "C", "D", "E"] },
+    { "code": "SENIOR_2", "displayName": "Senior 2", "qualifications": ["A", "B", "C", "D", "E"] }
+  ]
+}

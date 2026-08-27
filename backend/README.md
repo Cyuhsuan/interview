@@ -162,6 +162,17 @@ Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 servi
 
 (`professional_id`, `provider`) 必須 unique。開始接受預約前，每位啟用的 professional 必須同時具有一筆啟用且已驗證的 Google mapping，以及一筆啟用且已驗證的 Microsoft mapping。OAuth token、client secret 與 private key 不得存於 table、seed 或 repository，必須由受管理 secret system 持有。Mapping 或 provider 暫時不可用不影響 PostgreSQL 預約判定；同步由 outbox retry 與 reconciliation 處理。
 
+### `seed_history`
+
+| Column | Type | Constraint |
+|---|---|---|
+| `version` | `varchar(32)` | Primary key（natural key，非 UUID） |
+| `checksum` | `varchar(64)` | SHA-256 hex digest，NOT NULL |
+| `executed_at` | `timestamptz` | Default database current time |
+| `executor_id` | `varchar(128)` | NOT NULL，記錄執行者身分 |
+
+`checksum` 使用 `varchar` 而非 `char`：`char(n)` 會將值以空白填滿至固定長度，讀回時比對會因尾端空白而失準。無 FK 關聯——`seed_history` 是純技術/稽核表。
+
 ## Reference-data Seeder
 
 Seeder 是受權限的明確維運指令，不得在 API startup 自動執行。下表數值必須與根目錄 README「診所模型」一致，此處列出是為了提供 seed artifact 的精確 insert 值。
@@ -279,6 +290,6 @@ Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不�
 
 下列技術細節必須在加入相關後端程式碼前寫入本 contract 並完成審閱：
 
-1. BookingSession、Appointment、outbox、idempotency、audit 與 `seed_history` 的完整 production schema。
+1. BookingSession、Appointment、outbox、idempotency 與 audit 的完整 production schema。
 2. 各 API endpoint 的 request/response schema、必填欄位與完整 status/error mapping。
 3. 所有 provider outbox 狀態組合至 `calendarDelivery` 的完整映射。
