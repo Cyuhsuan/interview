@@ -10,8 +10,8 @@
 
 ## 實作限制
 
-- Domain 不得依賴 HTTP、SQL、AI SDK 或 Calendar SDK；外部依賴置於 application-owned interface 後方。
-- AI 只提供 intent/value 候選；資格、時長、availability 與預約合法性由 deterministic domain code 判斷。
+- 分層為 handler / service / repository，不採 DDD。`handler` 只做 HTTP request/response 轉換並呼叫 `service`；`service` 持有商業邏輯與其依賴的 interface；`repository` 只實作該 interface 並操作 PostgreSQL，不得包含商業規則。`handler` 與 `repository` 不得互相依賴，必須透過 `service`。
+- AI 只提供 intent/value 候選；資格、時長、availability 與預約合法性由 deterministic service 層程式碼判斷。
 - PostgreSQL 是唯一事實來源；預約、outbox、idempotency 與 audit 必須同一 transaction 寫入，外部 Calendar 寫入只能在 commit 後非同步執行。
 - 最終確認只重新檢查 PostgreSQL；外部 Calendar 不得作為 availability 輸入。已 commit 預約不得因同步失敗而回滾或刪除。
 - 重疊必須由 PostgreSQL exclusion constraint 阻擋，不可只做 application pre-check。

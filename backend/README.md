@@ -6,11 +6,11 @@
 
 ## 架構決策
 
-後端規劃採 modular Go monolith 與 PostgreSQL。PostgreSQL 是預約、人員、服務、availability、同步任務與 audit state 的唯一事實來源；Google Calendar 與 Microsoft Outlook 是只接收 PostgreSQL 資料的外部 projection，不得反向影響 availability 或預約判定。
+後端規劃採 modular Go monolith 與 PostgreSQL，分層採 handler / service / repository，不採 DDD bounded context 分層。PostgreSQL 是預約、人員、服務、availability、同步任務與 audit state 的唯一事實來源；Google Calendar 與 Microsoft Outlook 是只接收 PostgreSQL 資料的外部 projection，不得反向影響 availability 或預約判定。
 
-AI 只能擷取 intent 與欄位候選值。服務資格、時長、狀態轉換、availability 與最終預約判定必須由確定性 domain code 完成。
+AI 只能擷取 intent 與欄位候選值。服務資格、時長、狀態轉換、availability 與最終預約判定必須由確定性 service 層程式碼完成。
 
-### DDD 目錄規劃
+### 目錄規劃
 
 ```text
 backend/
@@ -19,22 +19,24 @@ backend/
 │   ├── calendar-worker/        # outbox delivery worker
 │   └── migrate/                # migration/seed command
 ├── internal/
-│   ├── catalog/                # Service and Professional
-│   │   ├── domain/
-│   │   ├── application/        # use cases and owned ports
-│   │   └── adapters/
-│   ├── scheduling/             # availability and interval rules
-│   │   ├── domain/
-│   │   ├── application/
-│   │   └── adapters/
-│   ├── booking/                # BookingSession and Appointment
-│   │   ├── domain/
-│   │   ├── application/
-│   │   └── adapters/
-│   ├── conversation/           # English-only flow and AI boundary
-│   ├── calendar/               # delivery and reconciliation
-│   ├── platform/               # HTTP, PostgreSQL, config, telemetry
-│   └── shared/                 # approved shared value types only
+│   ├── handler/                 # HTTP request/response mapping, no business logic
+│   │   ├── catalog/
+│   │   ├── scheduling/
+│   │   ├── booking/
+│   │   └── conversation/
+│   ├── service/                 # business rules, use cases, owned interfaces (ports)
+│   │   ├── catalog/
+│   │   ├── scheduling/
+│   │   ├── booking/
+│   │   └── conversation/
+│   ├── repository/              # PostgreSQL data access, implements service-owned interfaces
+│   │   ├── catalog/
+│   │   ├── scheduling/
+│   │   └── booking/
+│   ├── calendar/                 # outbox delivery adapter and reconciliation
+│   ├── model/                    # entities and value objects shared across layers
+│   ├── platform/                 # HTTP server, PostgreSQL client, config, telemetry
+│   └── shared/                   # approved shared value types only
 ├── migrations/
 ├── seeds/
 ├── test/
@@ -43,17 +45,17 @@ backend/
 └── README.md
 ```
 
-`domain` 不得 import HTTP、SQL、AI SDK 或 Calendar SDK。介面由使用它的 `application` package 擁有，並由 `adapters` 實作。Context 間以 command、query 或 value object 溝通，不共用 ORM model；`shared` 只放置跨兩個以上 context 且語意一致的型別。
+`handler` 只負責 HTTP request/response 轉換、驗證輸入格式與呼叫 `service`，不得直接操作 SQL 或呼叫外部 SDK。`service` 持有商業邏輯與其所需外部依賴的 interface（如 repository、calendar adapter），不得 import HTTP 或 SQL driver。`repository` 只實作 `service` 定義的 interface 並操作 PostgreSQL，不得包含商業規則。功能模組間以 exported service method、request/response 或 value object 溝通，不共用 repository 或 ORM model；`shared` 只放置跨兩個以上模組且語意一致的型別。
 
-| Context | 責任 | 不負責 |
+| 模組 | 責任 | 不負責 |
 |---|---|---|
 | Catalog | 服務、人員與明確服務資格 | Availability 與 Calendar 呼叫 |
 | Scheduling | 營業規則、內部時段、PostgreSQL appointment 與 availability | 建立 appointment 或讀取外部 Calendar |
 | Booking | Session、最終確認、防重疊與 outbox transaction | 直接呼叫 Calendar SDK |
 | Conversation | 英文對話、範圍邊界與 AI 候選值 | 核准預約 |
-| Calendar | Outbox delivery、retry 與 reconciliation | 改變 appointment domain state |
+| Calendar | Outbox delivery、retry 與 reconciliation | 改變 appointment 狀態 |
 
-Availability 是 Scheduling domain service；Calendar event 是 Appointment 的外部 projection。
+Availability 是 Scheduling service 的職責；Calendar event 是 Appointment 的外部 projection。
 
 ## Canonical Types
 
