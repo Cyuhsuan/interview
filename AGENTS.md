@@ -18,23 +18,15 @@
 ## 不可妥協的產品規則
 
 - 患者端語言僅使用英文。
-- 服務 A、B 各需 60 分鐘，可由 Junior、Senior 1 或 Senior 2 執行。
-- 服務 C 需 150 分鐘，僅可由 Senior 1 或 Senior 2 執行。
-- 服務 D 需 120 分鐘，僅可由 Senior 1 或 Senior 2 執行。
-- 服務 E 需 360 分鐘，僅可由 Senior 1 或 Senior 2 執行。
+- 服務時長與可執行人員資格以根目錄 README「診所模型」表為準，不得在其他文件另訂數值。
 - Bot 可以安排預約，但不得診斷、開立處方、提供緊急醫療建議、報價或處理保險。第一版不得取消或改期預約；相關要求必須轉接診所。
-- 可預約時間只以 PostgreSQL 中的服務時間、專業人員資格、診所營業時間、內部保留時段與已確認預約判斷；Google Calendar 與 Outlook 不得作為 availability 輸入。
-- 在患者正式確認前，必須再次從 PostgreSQL 檢查可預約狀態。
+- 可預約時間只以 PostgreSQL 中的服務時間、專業人員資格、診所營業時間、內部保留時段與已確認預約判斷；Google Calendar 與 Outlook 不得作為 availability 輸入，且患者正式確認前必須再次從 PostgreSQL 檢查。
 - 若無法從 PostgreSQL 驗證即時可預約狀態，系統必須採 fail-closed，並引導患者聯絡診所。
 - AI 模型可以理解語言，但預約是否合法必須由確定性的後端程式碼判斷。
 
 ## 交付順序
 
-1. 定義 API contract 與 production 資料模型。
-2. 實作並驗證 Go 後端。
-3. 實作並驗證 React 前端。
-4. 連接 Google 與 Microsoft sandbox tenant。
-5. 上線前完成安全、隱私、負載、復原及診所驗收檢查。
+交付階段與各階段完成條件見根目錄 README「建議交付階段」，本文件不重複列出。
 
 ## 文件標準
 

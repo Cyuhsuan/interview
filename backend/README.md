@@ -8,6 +8,15 @@
 
 後端規劃採 modular Go monolith 與 PostgreSQL，分層採 handler / service / repository，不採 DDD bounded context 分層。PostgreSQL 是預約、人員、服務、availability、同步任務與 audit state 的唯一事實來源；Google Calendar 與 Microsoft Outlook 是只接收 PostgreSQL 資料的外部 projection，不得反向影響 availability 或預約判定。
 
+### 技術棧
+
+| 用途 | 套件 | 使用範圍 |
+|---|---|---|
+| HTTP router/middleware | [`gin-gonic/gin`](https://github.com/gin-gonic/gin) | 只用於 `internal/handler` 與 `internal/platform` 的 HTTP server 組裝；`service`、`repository` 不得 import Gin。 |
+| PostgreSQL ORM | [`gorm.io/gorm`](https://gorm.io/) | 只用於 `internal/repository`；`service` 與 `handler` 不得 import GORM 或操作 `*gorm.DB`。禁止使用 `AutoMigrate`，schema 變更一律走既有 migration 流程。 |
+| Dependency injection | [`go.uber.org/fx`](https://github.com/uber-go/fx) | 只用於 `cmd/api`、`cmd/calendar-worker` 的 composition root，負責組裝 handler/service/repository 與 platform 依賴；business package 不得 import Fx。 |
+| 環境變數載入 | [`joho/godotenv`](https://github.com/joho/godotenv) | 只在本機/開發環境載入 `.env`；production 必須以真正的環境變數提供設定，缺少必要變數時 API 不得啟動，不得以 `.env` 作為 production 設定來源。 |
+
 AI 只能擷取 intent 與欄位候選值。服務資格、時長、狀態轉換、availability 與最終預約判定必須由確定性 service 層程式碼完成。
 
 ### 目錄規劃
@@ -155,7 +164,7 @@ Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 servi
 
 ## Reference-data Seeder
 
-Seeder 是受權限的明確維運指令，不得在 API startup 自動執行。
+Seeder 是受權限的明確維運指令，不得在 API startup 自動執行。下表數值必須與根目錄 README「診所模型」一致，此處列出是為了提供 seed artifact 的精確 insert 值。
 
 | Service code | Display name | Duration |
 |---|---|---:|
