@@ -216,6 +216,8 @@ Base path 為 `/api/v1`，只接受 HTTPS UTF-8 JSON。Request body 上限 64 Ki
 
 Appointment body 只含 UUID `bookingSessionId`，不包含 version。Booking session 的 `selectedSlot` 必須含 UUID `professionalId`、RFC 3339 `start`/`end` 與 IANA `timeZone`。
 
+患者身分不透過帳號或登入驗證：booking session 於 `collecting` 狀態蒐集患者姓名與 email，僅作為該筆預約的聯絡方式與行事曆邀請對象。任何外部 email 皆可用於預約，不要求預先註冊、網域限制或所有權驗證；email 不作為長期帳號識別，也不得用於跨 session 查詢或關聯患者歷史預約。
+
 Public session 必須使用簽署 JWT，並透過 `Secure; HttpOnly; SameSite=Strict` cookie 傳送，不得存入 `localStorage` 或 `sessionStorage`。JWT 至少包含 `iss`、`aud`、`sub`、`jti`、`iat`、`nbf` 與 `exp`，不得包含患者姓名、email 或訊息；伺服器必須固定允許的簽章演算法並驗證所有 claims。Cookie authentication 仍須搭配 CSRF token 與 non-empty exact-origin allowlist。
 
 Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限回傳 `429` 與 `Retry-After`。第一版不提供 appointment list、取消或改期 API。
