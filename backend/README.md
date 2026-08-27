@@ -224,6 +224,36 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 | `428` | `PRECONDITION_REQUIRED` |
 | `429` | `RATE_LIMITED` |
 | `503` | `AVAILABILITY_UNAVAILABLE` |
+| `500` | `INTERNAL_ERROR` |
+
+### Catalog Endpoint Schemas
+
+`GET /services` 回傳啟用中的服務陣列：
+
+```json
+[
+  {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "code": "A",
+    "displayName": "Service A",
+    "durationMinutes": 60
+  }
+]
+```
+
+`GET /professionals?serviceCode=C` 回傳同時啟用且具備該服務資格的人員陣列：
+
+```json
+[
+  {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "code": "SENIOR_1",
+    "displayName": "Senior 1"
+  }
+]
+```
+
+`serviceCode` 為必填 query 參數，必須符合 `^[A-Z][A-Z0-9_]{0,31}$`；缺少時回傳 `400 INVALID_REQUEST`（`errors[].field="serviceCode"`、`code="REQUIRED"`），格式不符回傳同狀態碼（`code="INVALID_FORMAT"`）。`serviceCode` 格式正確但不存在啟用中的對應服務、或該服務目前無任何啟用中的合格人員，回傳 `200` 與空陣列 `[]`——此為合法查詢的合法結果，不視為錯誤。
 
 ## Calendar Adapter Contract
 
