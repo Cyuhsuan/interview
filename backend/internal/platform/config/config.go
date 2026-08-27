@@ -18,6 +18,15 @@ type Config struct {
 	DBMaxOpenConns           int
 	DBMaxIdleConns           int
 	DBConnMaxLifetimeMinutes int
+
+	// Scheduling/Booking computation parameters. These are operational
+	// parameters (not availability-judgment inputs, which per README must
+	// live in PostgreSQL — see clinic_hours/clinic_closures), so they are
+	// required, fail-closed environment variables with no default, same as
+	// ClinicTimezone.
+	ClinicSlotIntervalMinutes int
+	ClinicMinLeadMinutes      int
+	BookingSessionTTLMinutes  int
 }
 
 func Load() (Config, error) {
@@ -63,6 +72,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	if cfg.ClinicSlotIntervalMinutes, err = requiredPositiveIntEnv("CLINIC_SLOT_INTERVAL_MINUTES"); err != nil {
+		return Config{}, err
+	}
+	if cfg.ClinicMinLeadMinutes, err = requiredPositiveIntEnv("CLINIC_MIN_LEAD_MINUTES"); err != nil {
+		return Config{}, err
+	}
+	if cfg.BookingSessionTTLMinutes, err = requiredPositiveIntEnv("BOOKING_SESSION_TTL_MINUTES"); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
 }
 
@@ -74,6 +93,24 @@ func intEnv(key string, fallback int) (int, error) {
 	value, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return value, nil
+}
+
+// requiredPositiveIntEnv fails startup instead of falling back to a
+// default, per the MVP principle in root AGENTS.md against implicit
+// default values for clinic-specific scheduling parameters.
+func requiredPositiveIntEnv(key string) (int, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return 0, fmt.Errorf("%s is required", key)
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return value, nil
 }

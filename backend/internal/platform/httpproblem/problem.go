@@ -9,17 +9,32 @@ const ContentType = "application/problem+json"
 
 // Error codes from backend/README.md's Error Contract table.
 const (
-	CodeInvalidRequest = "INVALID_REQUEST"
-	CodeInternalError  = "INTERNAL_ERROR"
-	// Future codes (SLOT_NO_LONGER_AVAILABLE, IDEMPOTENCY_KEY_REUSED,
-	// BOOKING_SESSION_EXPIRED, SESSION_VERSION_MISMATCH, REQUEST_TOO_LARGE,
-	// VALIDATION_FAILED, PRECONDITION_REQUIRED, RATE_LIMITED,
-	// AVAILABILITY_UNAVAILABLE) are added here by the modules that need them.
+	CodeInvalidRequest          = "INVALID_REQUEST"
+	CodeInternalError           = "INTERNAL_ERROR"
+	CodeSlotNoLongerAvailable   = "SLOT_NO_LONGER_AVAILABLE"
+	CodeIdempotencyKeyReused    = "IDEMPOTENCY_KEY_REUSED"
+	CodeBookingSessionExpired   = "BOOKING_SESSION_EXPIRED"
+	CodeSessionVersionMismatch  = "SESSION_VERSION_MISMATCH"
+	CodeRequestTooLarge         = "REQUEST_TOO_LARGE"
+	CodeValidationFailed        = "VALIDATION_FAILED"
+	CodePreconditionRequired    = "PRECONDITION_REQUIRED"
+	CodeAvailabilityUnavailable = "AVAILABILITY_UNAVAILABLE"
+	// RATE_LIMITED is not yet produced by any handler — no rate-limit
+	// middleware exists yet — so its constant is intentionally omitted
+	// until that middleware is added.
 )
 
 var titles = map[string]string{
-	CodeInvalidRequest: "Invalid Request",
-	CodeInternalError:  "Internal Error",
+	CodeInvalidRequest:          "Invalid Request",
+	CodeInternalError:           "Internal Error",
+	CodeSlotNoLongerAvailable:   "Slot No Longer Available",
+	CodeIdempotencyKeyReused:    "Idempotency Key Reused",
+	CodeBookingSessionExpired:   "Booking Session Expired",
+	CodeSessionVersionMismatch:  "Session Version Mismatch",
+	CodeRequestTooLarge:         "Request Too Large",
+	CodeValidationFailed:        "Validation Failed",
+	CodePreconditionRequired:    "Precondition Required",
+	CodeAvailabilityUnavailable: "Availability Unavailable",
 }
 
 type FieldError struct {
