@@ -1,0 +1,245 @@
+{
+  "info": {
+    "name": "牙科診所預約 API",
+    "description": "對應 backend/README.md 所定義的 Go 後端 API：健康檢查、服務目錄（Catalog）、可預約時段查詢（Scheduling）與預約流程（Booking：Session + 確認預約）。行事曆同步／outbox 尚未實作，回應不會包含 calendarDelivery 欄位。\n\n使用前置作業：\n1. 執行 reference-data seeder：`go run ./cmd/migrate seed -executor=<你的名字>`，建立 services／professionals 資料。\n2. `clinic_hours`／`clinic_closures` 目前為空（診所尚未確認實際營業時間），在補上對應 weekday 的資料前，「查詢可預約時段」會合法地回傳空陣列 `[]`（fail-closed 行為，非錯誤）。\n\n「預約流程」資料夾請依編號順序執行：1 建立 Session → 2 取得 Session → 3 更新 Session（選擇服務／時段／患者資料）→ 4 更新 Session（轉為準備確認）→ 5 確認預約。每一步的 Test Script 會自動讀取回應的 ETag／id 並更新 {{sessionId}}／{{sessionVersion}}，可直接依序點擊執行或用 Collection Runner 跑。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string", "description": "後端服務位址" },
+    { "key": "apiBase", "value": "{{baseUrl}}/api/v1", "type": "string", "description": "API base path" },
+    { "key": "serviceCode", "value": "A", "type": "string", "description": "預約服務種類代碼（A/B/C/D/E，見根目錄 README 診所模型）" },
+    { "key": "date", "value": "2026-09-02", "type": "string", "description": "查詢可預約時段用的日期（YYYY-MM-DD，以診所時區解讀）；請自行改成 clinic_hours 已設定的 weekday" },
+    { "key": "professionalId", "value": "00000000-0000-0000-0000-000000000000", "type": "string", "description": "預約的工作人員 UUID（範例值，非真實 ID）；執行「查詢合格人員」或「查詢可預約時段」後會自動覆蓋成實際存在的人員 ID，不需手動填" },
+    { "key": "slotStart", "value": "2026-09-02T09:00:00-04:00", "type": "string", "description": "預約開始時段（RFC 3339，範例值；執行「查詢可預約時段」後會被實際回傳的時段覆蓋）" },
+    { "key": "slotEnd", "value": "2026-09-02T10:00:00-04:00", "type": "string", "description": "預約結束時段（RFC 3339，範例值；執行「查詢可預約時段」後會被實際回傳的時段覆蓋）" },
+    { "key": "slotTimeZone", "value": "America/New_York", "type": "string", "description": "診所時區（需與 CLINIC_TIMEZONE 環境變數一致）" },
+    { "key": "patientName", "value": "王小明", "type": "string", "description": "測試用患者姓名" },
+    { "key": "patientEmail", "value": "patient@example.com", "type": "string", "description": "測試用患者 email" },
+    { "key": "sessionId", "value": "", "type": "string", "description": "建立 Session 後自動帶入" },
+    { "key": "sessionVersion", "value": "", "type": "string", "description": "每次回應的 ETag（去除引號）自動帶入，作為下一次 If-Match" }
+  ],
+  "item": [
+    {
+      "name": "健康檢查",
+      "item": [
+        {
+          "name": "健康檢查",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/healthz", "host": ["{{baseUrl}}"], "path": ["healthz"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "服務目錄",
+      "item": [
+        {
+          "name": "查詢啟用中的服務",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{apiBase}}/services", "host": ["{{apiBase}}"], "path": ["services"] }
+          }
+        },
+        {
+          "name": "查詢合格人員",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/professionals?serviceCode={{serviceCode}}",
+              "host": ["{{apiBase}}"],
+              "path": ["professionals"],
+              "query": [{ "key": "serviceCode", "value": "{{serviceCode}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  if (Array.isArray(body) && body.length > 0) {",
+                  "    pm.collectionVariables.set('professionalId', body[0].id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "可預約時段",
+      "item": [
+        {
+          "name": "查詢可預約時段",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiBase}}/availability?serviceCode={{serviceCode}}&date={{date}}",
+              "host": ["{{apiBase}}"],
+              "path": ["availability"],
+              "query": [
+                { "key": "serviceCode", "value": "{{serviceCode}}" },
+                { "key": "date", "value": "{{date}}" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  if (Array.isArray(body) && body.length > 0) {",
+                  "    pm.collectionVariables.set('professionalId', body[0].professionalId);",
+                  "    pm.collectionVariables.set('slotStart', body[0].start);",
+                  "    pm.collectionVariables.set('slotEnd', body[0].end);",
+                  "    pm.collectionVariables.set('slotTimeZone', body[0].timeZone);",
+                  "  } else {",
+                  "    console.warn('沒有回傳任何可預約時段——請確認 clinic_hours 是否已設定該 weekday，或該時段是否已被既有預約／blocked slot 占用。');",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "預約流程",
+      "item": [
+        {
+          "name": "1. 建立預約 Session",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": { "raw": "{{apiBase}}/booking-sessions", "host": ["{{apiBase}}"], "path": ["booking-sessions"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('已建立 (201)', function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('sessionId', body.id);",
+                  "const etag = pm.response.headers.get('ETag');",
+                  "if (etag) { pm.collectionVariables.set('sessionVersion', etag.replace(/\"/g, '')); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. 取得預約 Session",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{apiBase}}/booking-sessions/{{sessionId}}", "host": ["{{apiBase}}"], "path": ["booking-sessions", "{{sessionId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const etag = pm.response.headers.get('ETag');",
+                  "if (etag) { pm.collectionVariables.set('sessionVersion', etag.replace(/\"/g, '')); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. 更新 Session：選擇服務／時段／患者資料",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "If-Match", "value": "{{sessionVersion}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serviceCode\": \"{{serviceCode}}\",\n  \"selectedSlot\": {\n    \"professionalId\": \"{{professionalId}}\",\n    \"start\": \"{{slotStart}}\",\n    \"end\": \"{{slotEnd}}\",\n    \"timeZone\": \"{{slotTimeZone}}\"\n  },\n  \"patientName\": \"{{patientName}}\",\n  \"patientEmail\": \"{{patientEmail}}\"\n}"
+            },
+            "url": { "raw": "{{apiBase}}/booking-sessions/{{sessionId}}", "host": ["{{apiBase}}"], "path": ["booking-sessions", "{{sessionId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const etag = pm.response.headers.get('ETag');",
+                  "if (etag) { pm.collectionVariables.set('sessionVersion', etag.replace(/\"/g, '')); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. 更新 Session：轉為準備確認狀態",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "If-Match", "value": "{{sessionVersion}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"readyToConfirm\"\n}" },
+            "url": { "raw": "{{apiBase}}/booking-sessions/{{sessionId}}", "host": ["{{apiBase}}"], "path": ["booking-sessions", "{{sessionId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const etag = pm.response.headers.get('ETag');",
+                  "if (etag) { pm.collectionVariables.set('sessionVersion', etag.replace(/\"/g, '')); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. 確認預約",
+          "request": {
+            "method": "POST",
+            "description": "依 API contract，POST /appointments 只需要 bookingSessionId；預約開始時段、工作人員與服務種類是在第 3 步 PATCH Session 時就已寫入該 session（serviceCode／selectedSlot），這裡會直接沿用，不需要也不可以在這個 request body 重複提交，伺服器會在此步驟於單一 transaction 內重新驗證這些內容仍然可預約。",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "If-Match", "value": "{{sessionVersion}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"bookingSessionId\": \"{{sessionId}}\"\n}" },
+            "url": { "raw": "{{apiBase}}/appointments", "host": ["{{apiBase}}"], "path": ["appointments"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('已確認 (201)', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
