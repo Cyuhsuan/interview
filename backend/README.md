@@ -13,7 +13,7 @@
 | 用途 | 套件 | 使用範圍 |
 |---|---|---|
 | HTTP router/middleware | [`gin-gonic/gin`](https://github.com/gin-gonic/gin) | 只用於 `internal/handler` 與 `internal/platform` 的 HTTP server 組裝；`service`、`repository` 不得 import Gin。 |
-| PostgreSQL ORM | [`gorm.io/gorm`](https://gorm.io/) | 只用於 `internal/repository`；`service` 與 `handler` 不得 import GORM 或操作 `*gorm.DB`。禁止使用 `AutoMigrate`，schema 變更一律走既有 migration 流程。 |
+| PostgreSQL ORM | [`gorm.io/gorm`](https://gorm.io/) | 唯一的 `*gorm.DB` connection pool 由 `internal/platform/database` 建立並透過 Fx 以單例注入；查詢邏輯只能寫在 `internal/repository`，`service` 與 `handler` 不得 import GORM 或操作 `*gorm.DB`。禁止使用 `AutoMigrate`，schema 變更一律走既有 migration 流程。 |
 | Dependency injection | [`go.uber.org/fx`](https://github.com/uber-go/fx) | 只用於 `cmd/api`、`cmd/calendar-worker` 的 composition root，負責組裝 handler/service/repository 與 platform 依賴；business package 不得 import Fx。 |
 | 環境變數載入 | [`joho/godotenv`](https://github.com/joho/godotenv) | 只在本機/開發環境載入 `.env`；production 必須以真正的環境變數提供設定，缺少必要變數時 API 不得啟動，不得以 `.env` 作為 production 設定來源。 |
 
