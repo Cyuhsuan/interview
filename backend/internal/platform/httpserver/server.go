@@ -12,9 +12,10 @@ import (
 	"backend/internal/platform/config"
 )
 
-func NewEngine() *gin.Engine {
+func NewEngine(cfg config.Config) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	engine.Use(CORSMiddleware(cfg.FrontendOrigin))
 	return engine
 }
 

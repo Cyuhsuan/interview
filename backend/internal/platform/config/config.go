@@ -13,6 +13,7 @@ type Config struct {
 	Env            string
 	Port           string
 	ClinicTimezone string
+	FrontendOrigin string
 
 	DatabaseURL              string
 	DBMaxOpenConns           int
@@ -48,6 +49,11 @@ func Load() (Config, error) {
 
 	if cfg.Port == "" {
 		cfg.Port = "8080"
+	}
+
+	cfg.FrontendOrigin = os.Getenv("FRONTEND_ORIGIN")
+	if cfg.FrontendOrigin == "" {
+		cfg.FrontendOrigin = "http://localhost:5173"
 	}
 
 	if cfg.ClinicTimezone == "" {
