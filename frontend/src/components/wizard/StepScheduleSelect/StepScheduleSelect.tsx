@@ -25,8 +25,10 @@ export function StepScheduleSelect() {
   const [slots, setSlots] = useState<AvailabilitySlot[] | null>(null)
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [loadingSlots, setLoadingSlots] = useState(false)
+  const [professionalFilter, setProfessionalFilter] = useState<string>('any')
 
   useEffect(() => {
+    setProfessionalFilter('any')
     getProfessionals(serviceCode)
       .then(setProfessionals)
       .catch(() => setProfessionals([]))
@@ -66,6 +68,11 @@ export function StepScheduleSelect() {
     return professionals?.find((p) => p.id === id)?.displayName ?? 'Available practitioner'
   }
 
+  const visibleSlots =
+    professionalFilter === 'any'
+      ? slots
+      : (slots?.filter((slot) => slot.professionalId === professionalFilter) ?? null)
+
   return (
     <section aria-labelledby="step-heading">
       <h2 id="step-heading">Choose a date and time</h2>
@@ -74,6 +81,34 @@ export function StepScheduleSelect() {
         <p className={styles.eligibility}>
           This service can be performed by: {professionals.map((p) => p.displayName).join(', ')}.
         </p>
+      )}
+
+      {professionals && professionals.length > 1 && (
+        <fieldset className={styles.practitionerFilter}>
+          <legend>Practitioner</legend>
+          <label>
+            <input
+              type="radio"
+              name="practitioner-filter"
+              value="any"
+              checked={professionalFilter === 'any'}
+              onChange={() => setProfessionalFilter('any')}
+            />
+            Any practitioner
+          </label>
+          {professionals.map((p) => (
+            <label key={p.id}>
+              <input
+                type="radio"
+                name="practitioner-filter"
+                value={p.id}
+                checked={professionalFilter === p.id}
+                onChange={() => setProfessionalFilter(p.id)}
+              />
+              {p.displayName}
+            </label>
+          ))}
+        </fieldset>
       )}
 
       <div className={styles.datePicker}>
@@ -97,9 +132,13 @@ export function StepScheduleSelect() {
         <EmptyState message="No available times on this date. Try another date." />
       )}
 
-      {!loadingSlots && slots && slots.length > 0 && (
+      {!loadingSlots && date && slots && slots.length > 0 && visibleSlots && visibleSlots.length === 0 && (
+        <EmptyState message="This practitioner has no available times on this date. Try another date or practitioner." />
+      )}
+
+      {!loadingSlots && visibleSlots && visibleSlots.length > 0 && (
         <ul className={styles.slotList}>
-          {slots.map((slot) => (
+          {visibleSlots.map((slot) => (
             <li key={`${slot.professionalId}-${slot.start}`}>
               <button
                 type="button"
