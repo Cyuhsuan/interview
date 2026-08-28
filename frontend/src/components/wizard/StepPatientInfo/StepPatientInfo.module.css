@@ -1,0 +1,18 @@
+.form {
+  display: flex;
+  flex-direction: column;
+}
+
+.submit {
+  align-self: flex-start;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  font-weight: 600;
+}
+
+.submit:disabled {
+  opacity: 0.6;
+}

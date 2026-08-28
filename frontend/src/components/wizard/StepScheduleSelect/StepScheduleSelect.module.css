@@ -1,0 +1,56 @@
+.datePicker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+}
+
+.datePicker label {
+  font-weight: 600;
+}
+
+.datePicker input {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  max-width: 220px;
+}
+
+.eligibility {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  margin-bottom: var(--space-4);
+}
+
+.slotList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.slotButton {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.slotButton:hover,
+.slotButton:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.slotTime {
+  display: block;
+  font-weight: 600;
+}
+
+.slotProfessional {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}

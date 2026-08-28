@@ -1,0 +1,36 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.card:hover,
+.card:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.cardTitle {
+  font-weight: 600;
+  font-size: var(--font-size-lg);
+}
+
+.cardMeta {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
