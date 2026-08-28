@@ -28,6 +28,15 @@ type Config struct {
 	ClinicSlotIntervalMinutes int
 	ClinicMinLeadMinutes      int
 	BookingSessionTTLMinutes  int
+
+	// AI Provider adapter (internal/ai). See backend/README.md's "AI
+	// Provider Adapter Contract" — this is a development/test-time
+	// OpenAI-compatible integration, not an approved production AI
+	// provider, so it fails closed like other clinic-specific settings
+	// rather than falling back to an implicit default.
+	AIProviderAPIKey  string
+	AIProviderBaseURL string
+	AIProviderModel   string
 }
 
 func Load() (Config, error) {
@@ -88,6 +97,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	if cfg.AIProviderAPIKey, err = requiredStringEnv("AI_PROVIDER_API_KEY"); err != nil {
+		return Config{}, err
+	}
+	if cfg.AIProviderBaseURL, err = requiredStringEnv("AI_PROVIDER_BASE_URL"); err != nil {
+		return Config{}, err
+	}
+	if cfg.AIProviderModel, err = requiredStringEnv("AI_PROVIDER_MODEL"); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
 }
 
@@ -117,6 +136,16 @@ func requiredPositiveIntEnv(key string) (int, error) {
 	}
 	if value <= 0 {
 		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return value, nil
+}
+
+// requiredStringEnv fails startup instead of falling back to an implicit
+// default, same rationale as requiredPositiveIntEnv.
+func requiredStringEnv(key string) (string, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", key)
 	}
 	return value, nil
 }

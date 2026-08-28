@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { ChatShell } from './components/chat/ChatShell/ChatShell'
 import { WizardShell } from './components/wizard/WizardShell'
 import { StepPatientInfo } from './components/wizard/StepPatientInfo/StepPatientInfo'
 import { StepReviewConfirm } from './components/wizard/StepReviewConfirm/StepReviewConfirm'
@@ -6,6 +8,7 @@ import { StepServiceSelect } from './components/wizard/StepServiceSelect/StepSer
 import { StepSuccess } from './components/wizard/StepSuccess/StepSuccess'
 import { BookingProvider } from './state/BookingContext'
 import { useBookingState } from './state/BookingContext'
+import styles from './App.module.css'
 
 function WizardSteps() {
   const state = useBookingState()
@@ -24,13 +27,44 @@ function WizardSteps() {
   }
 }
 
+type Mode = 'wizard' | 'chat'
+
 function App() {
+  const [mode, setMode] = useState<Mode>('wizard')
+
   return (
-    <BookingProvider>
-      <WizardShell>
-        <WizardSteps />
-      </WizardShell>
-    </BookingProvider>
+    <div className={styles.app}>
+      <div className={styles.modeSwitcher} role="tablist" aria-label="Booking mode">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'wizard'}
+          className={mode === 'wizard' ? styles.modeButtonActive : styles.modeButton}
+          onClick={() => setMode('wizard')}
+        >
+          Step-by-step form
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'chat'}
+          className={mode === 'chat' ? styles.modeButtonActive : styles.modeButton}
+          onClick={() => setMode('chat')}
+        >
+          Chat
+        </button>
+      </div>
+
+      {mode === 'wizard' ? (
+        <BookingProvider>
+          <WizardShell>
+            <WizardSteps />
+          </WizardShell>
+        </BookingProvider>
+      ) : (
+        <ChatShell />
+      )}
+    </div>
   )
 }
 

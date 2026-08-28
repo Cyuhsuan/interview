@@ -445,9 +445,48 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 
 回應**不含 `calendarDelivery`**——outbox 尚未實作（見「Outbox／Calendar delivery」章節），待該功能落地後才會在此新增此欄位，不得提前回傳假值。Session 非 `readyToConfirm` 狀態時回傳 `422 VALIDATION_FAILED`；slot 已被搶走（exclusion constraint 衝突）回傳 `409 SLOT_NO_LONGER_AVAILABLE`；`Idempotency-Key` 重複且 request hash 不同回傳 `409 IDEMPOTENCY_KEY_REUSED`；重複且 hash 相同回放原本的 status/body。
 
+`POST /booking-sessions/{id}/messages`（不需要 `If-Match`——這個 endpoint 內部讀取 session 目前 version 並套用變更，不對外暴露樂觀鎖）傳送一則英文患者訊息：
+
+```json
+{ "message": "I'd like to book a cleaning next Tuesday afternoon" }
+```
+
+`message` 為必填，trim 後 1–2,000 Unicode code points（同本節開頭的全域訊息長度限制）；缺少或空白回傳 `400 INVALID_REQUEST`（`errors[].field="message"`、`code="REQUIRED"`），超過長度上限回傳同狀態碼（`code="TOO_LONG"`）。Session 不存在或已過期回傳 `410 BOOKING_SESSION_EXPIRED`，與其他 session endpoint 一致。
+
+成功時回傳 `200`，body 與 `GET /booking-sessions/{id}` 相同的 session representation，外加三個欄位：
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "collecting",
+  "serviceCode": "C",
+  "selectedSlot": null,
+  "patientName": null,
+  "patientEmail": null,
+  "expiresAt": "2026-08-27T10:15:00Z",
+  "reply": "Got it — a Service C appointment. What date would you like to come in?",
+  "offeredSlots": [],
+  "outOfScope": false
+}
+```
+
+- `reply`：機器人回覆的英文文字。**一律由後端確定性樣板組成**——AI 只用來判斷本輪要用哪個樣板（例如「已擷取到 service，但缺 date」或「超出範圍分類為 emergency」），不得把 AI 生成的自由文字直接當作 `reply` 回傳，避免 AI 意外產出診斷、報價或其他超出範圍的內容。
+- `offeredSlots`：本輪由 Scheduling（`GET /availability` 同一套邏輯）算出的候選時段陣列，形狀同 `GET /availability` 的元素（`professionalId`/`start`/`end`/`timeZone`）；只有當 session 已知 `serviceCode` 且本輪訊息可解析出明確日期時才非空，其餘情況一律回傳 `[]`。選擇某個時段一律透過既有 `PATCH /booking-sessions/{id}`（帶 `selectedSlot`）完成，`/messages` 本身不會把時段寫入 session——**這是刻意的第一版限制**：因為不儲存對話歷史，无法用「選 option 2」這種指代前一輪選項的說法反查，所以由前端把 `offeredSlots` 渲染成可點擊的按鈕，直接呼叫 `PATCH` 送出結構化的 `selectedSlot`。
+- `outOfScope`：本輪訊息是否被分類為超出範圍（診斷、處方、緊急醫療、報價、保險或取消／改期要求之一）。分類為 `true` 時，`reply` 一律是該分類對應的固定樣板（引導患者直接聯絡診所，緊急情況建議立即就醫），且本輪**不會**修改任何 session 欄位，即使訊息中同時夾帶了服務或日期資訊。
+
+`ETag` header 一律帶 session 目前的 version（不論本輪是否真的修改了欄位）。AI 候選值若無法對應到合法的服務代碼或候選日期無法解析，**不是錯誤**——service 層直接忽略該候選值，`reply` 改為澄清問句請患者換句話說，HTTP 回應仍是 `200`。同理，若套用當下 session version 被其他請求搶先變更，service 內部重新讀取一次並重試一次即可，仍回傳 `200`（`reply` 提示請再說一次），不會把樂觀鎖衝突以 `412` 曝露給聊天使用者。真正會回傳非 `200` 的情況只有：請求格式本身不合法（`400`）、session 不存在或過期（`410`）、計算 `offeredSlots` 時 PostgreSQL 查詢失敗（依 fail-closed 規則回傳 `503 AVAILABILITY_UNAVAILABLE`，不得回傳臆測時段）、或非預期的伺服器錯誤（`500`）。
+
 ## Calendar Adapter Contract
 
 Provider-neutral ports 只負責將 PostgreSQL appointment 投影至外部系統，第一版支援 `Create`、health、retry classification 與 reconciliation；不提供 `Busy`、`Update` 或 `Cancel`。
+
+## AI Provider Adapter Contract
+
+Provider-neutral port（`internal/service/conversation.AIProvider`）只負責「單輪訊息 → 候選值＋範圍分類」：輸入一則患者訊息、一個 reference time 與目前已知的合法服務代碼列表，輸出候選的 `serviceCode`／日期／時段偏好（早上／下午／晚上）／患者姓名／email，以及是否屬於超出範圍分類。Port 不做多輪對話記憶、不做時段選擇、不判斷預約是否合法——這些一律由 `internal/service/conversation` 呼叫既有的 `internal/service/booking` 與 `internal/service/scheduling` 確定性邏輯完成，AI 輸出的候選值套用方式與 `PATCH /booking-sessions/{id}` 的欄位驗證完全一致。
+
+第一版由 `internal/ai` 提供唯一的具體實作：一個 OpenAI-compatible Chat Completions HTTP client，要求模型以固定 JSON schema 回傳擷取結果。啟動時必須設定 `AI_PROVIDER_API_KEY`、`AI_PROVIDER_BASE_URL`、`AI_PROVIDER_MODEL`，缺少任一值 `cmd/api` 必須直接啟動失敗，比照 `CLINIC_TIMEZONE`／`DATABASE_URL` 的 fail-closed 慣例，不得使用隱性預設值。呼叫逾時或回傳內容無法解析為預期 JSON schema 時，視為擷取失敗：conversation service 必須 fallback 成一句固定的澄清回覆，不得把例外往上拋成 `500`，也不得套用任何候選值到 session。
+
+**這是本階段的開發／測試用介接選擇，不是根目錄 README「實作前必須決定的事項」第 3 項核准的正式 production AI provider**；正式供應商選型與適用的健康資料／隱私協議仍待診所核准，核准前不得把本 adapter 的預設值當成 production 承諾對外宣稱。
 
 Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不預設共用同一 OAuth flow。各 provider 必須使用 least-privilege access，並記錄 credential owner、rotation、revocation、reauthorization 與 tenant/calendar access boundary。
 

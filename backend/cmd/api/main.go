@@ -6,8 +6,10 @@ import (
 	"go.uber.org/fx"
 	"gorm.io/gorm"
 
+	"backend/internal/ai"
 	bookingHandler "backend/internal/handler/booking"
 	catalogHandler "backend/internal/handler/catalog"
+	conversationHandler "backend/internal/handler/conversation"
 	"backend/internal/handler/health"
 	schedulingHandler "backend/internal/handler/scheduling"
 	"backend/internal/platform/config"
@@ -19,6 +21,7 @@ import (
 	schedulingRepo "backend/internal/repository/scheduling"
 	bookingService "backend/internal/service/booking"
 	catalogService "backend/internal/service/catalog"
+	conversationService "backend/internal/service/conversation"
 	schedulingService "backend/internal/service/scheduling"
 )
 
@@ -41,6 +44,26 @@ func newSchedulingService(
 
 func newSchedulingHandler(service *schedulingService.Service, cfg config.Config) *schedulingHandler.Handler {
 	return schedulingHandler.NewHandler(service, cfg.ClinicTimezone)
+}
+
+func newAIClient(cfg config.Config) *ai.Client {
+	return ai.NewClient(cfg.AIProviderBaseURL, cfg.AIProviderAPIKey, cfg.AIProviderModel)
+}
+
+func newAIProvider(client *ai.Client) conversationService.AIProvider { return client }
+
+func newConversationService(
+	booking *bookingService.Service,
+	scheduling *schedulingService.Service,
+	catalog *catalogService.Service,
+	aiProvider conversationService.AIProvider,
+	loc *time.Location,
+) *conversationService.Service {
+	return conversationService.NewService(booking, scheduling, catalog, aiProvider, loc)
+}
+
+func newConversationHandler(service *conversationService.Service, catalog *catalogService.Service, cfg config.Config) *conversationHandler.Handler {
+	return conversationHandler.NewHandler(service, catalog, cfg.ClinicTimezone)
 }
 
 func newBookingService(
@@ -79,6 +102,11 @@ func main() {
 			bookingRepo.NewRepository,
 			newBookingService,
 			bookingHandler.NewHandler,
+
+			newAIClient,
+			newAIProvider,
+			newConversationService,
+			newConversationHandler,
 		),
 		fx.Invoke(
 			func(*gorm.DB) {}, // force the pool to be constructed and pinged at startup
@@ -86,6 +114,7 @@ func main() {
 			catalogHandler.RegisterRoutes,
 			schedulingHandler.RegisterRoutes,
 			bookingHandler.RegisterRoutes,
+			conversationHandler.RegisterRoutes,
 			httpserver.RegisterServer,
 		),
 	).Run()
