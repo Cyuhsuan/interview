@@ -12,6 +12,7 @@ import (
 	conversationHandler "backend/internal/handler/conversation"
 	"backend/internal/handler/health"
 	schedulingHandler "backend/internal/handler/scheduling"
+	voiceHandler "backend/internal/handler/voice"
 	"backend/internal/platform/config"
 	"backend/internal/platform/database"
 	"backend/internal/platform/httpserver"
@@ -23,6 +24,7 @@ import (
 	catalogService "backend/internal/service/catalog"
 	conversationService "backend/internal/service/conversation"
 	schedulingService "backend/internal/service/scheduling"
+	transcriptionService "backend/internal/service/transcription"
 )
 
 func newClinicLocation(cfg config.Config) (*time.Location, error) {
@@ -66,6 +68,18 @@ func newConversationHandler(service *conversationService.Service, catalog *catal
 	return conversationHandler.NewHandler(service, catalog, cfg.ClinicTimezone)
 }
 
+func newTranscriptionClient(cfg config.Config) *ai.TranscriptionClient {
+	return ai.NewTranscriptionClient(cfg.AIProviderBaseURL, cfg.AIProviderAPIKey, cfg.AIProviderTranscriptionModel)
+}
+
+func newTranscriptionProvider(client *ai.TranscriptionClient) transcriptionService.Provider {
+	return client
+}
+
+func newTranscriptionHandler(service *transcriptionService.Service) *voiceHandler.Handler {
+	return voiceHandler.NewHandler(service)
+}
+
 func newBookingService(
 	repo *bookingRepo.Repository,
 	catalog *catalogService.Service,
@@ -107,6 +121,11 @@ func main() {
 			newAIProvider,
 			newConversationService,
 			newConversationHandler,
+
+			newTranscriptionClient,
+			newTranscriptionProvider,
+			transcriptionService.NewService,
+			newTranscriptionHandler,
 		),
 		fx.Invoke(
 			func(*gorm.DB) {}, // force the pool to be constructed and pinged at startup
@@ -115,6 +134,7 @@ func main() {
 			schedulingHandler.RegisterRoutes,
 			bookingHandler.RegisterRoutes,
 			conversationHandler.RegisterRoutes,
+			voiceHandler.RegisterRoutes,
 			httpserver.RegisterServer,
 		),
 	).Run()

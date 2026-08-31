@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { getProfessionals } from '../../../api/professionals'
 import type { Professional } from '../../../api/types'
 import { useChatSession } from '../../../hooks/useChatSession'
+import { useVoiceOutput } from '../../../hooks/useVoiceOutput'
 import { formatDate, formatTimeRange } from '../../../utils/formatDateTime'
 import { ErrorBanner } from '../../shared/ErrorBanner'
 import { LiveRegion } from '../../shared/LiveRegion'
 import { LoadingSpinner } from '../../shared/LoadingSpinner'
 import { ChatInput } from '../ChatInput/ChatInput'
 import { MessageList } from '../MessageList/MessageList'
+import { SpeakRepliesToggle } from '../VoiceControls/SpeakRepliesToggle'
 import styles from './ChatShell.module.css'
 
 export function ChatShell() {
@@ -15,6 +17,8 @@ export function ChatShell() {
   const listEndRef = useRef<HTMLDivElement>(null)
   const [professionals, setProfessionals] = useState<Professional[] | null>(null)
   const [professionalFilter, setProfessionalFilter] = useState('any')
+  const voiceOutput = useVoiceOutput()
+  const lastSpokenIdRef = useRef<string | null>('welcome')
 
   const serviceCode = state.session?.serviceCode ?? null
 
@@ -42,6 +46,13 @@ export function ChatShell() {
   }, [state.messages.length])
 
   const lastBotMessage = [...state.messages].reverse().find((m) => m.role === 'bot')
+
+  useEffect(() => {
+    if (lastBotMessage && lastBotMessage.id !== lastSpokenIdRef.current) {
+      lastSpokenIdRef.current = lastBotMessage.id
+      voiceOutput.speak(lastBotMessage.text)
+    }
+  }, [lastBotMessage, voiceOutput])
   const appointment = state.appointment
 
   if (appointment) {
@@ -86,6 +97,12 @@ export function ChatShell() {
         This assistant can help you book an appointment. It can't diagnose, prescribe, quote prices, or
         handle insurance, cancellations, or reschedules — for those, please contact the clinic directly.
       </p>
+
+      <SpeakRepliesToggle
+        supported={voiceOutput.supported}
+        enabled={voiceOutput.enabled}
+        onChange={voiceOutput.setEnabled}
+      />
 
       {professionals && professionals.length > 1 && (
         <fieldset className={styles.practitionerFilter}>

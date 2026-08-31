@@ -37,6 +37,13 @@ type Config struct {
 	AIProviderAPIKey  string
 	AIProviderBaseURL string
 	AIProviderModel   string
+
+	// AIProviderTranscriptionModel is the model used for the voice
+	// transcription adapter (internal/ai.TranscriptionClient). It reuses
+	// AIProviderBaseURL/AIProviderAPIKey — see backend/README.md's "Voice
+	// Transcription Endpoint" — rather than introducing a separate
+	// credential set for a hypothetical different provider.
+	AIProviderTranscriptionModel string
 }
 
 func Load() (Config, error) {
@@ -104,6 +111,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.AIProviderModel, err = requiredStringEnv("AI_PROVIDER_MODEL"); err != nil {
+		return Config{}, err
+	}
+	if cfg.AIProviderTranscriptionModel, err = requiredStringEnv("AI_PROVIDER_TRANSCRIPTION_MODEL"); err != nil {
 		return Config{}, err
 	}
 

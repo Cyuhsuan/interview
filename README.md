@@ -61,5 +61,5 @@
 
 1. 確認診所時區、營業時間、假日、休息時段、slot interval 與最短提前預約時間。
 2. 確認 Google／Microsoft 授權模式、tenant 權限與 credential storage；每位啟用的專業人員必須同時具有兩個 provider 的獨立 mapping。
-3. 選擇 production AI provider，以及適用的健康資料與隱私協議。（目前後端已用 provider-neutral 介面接上一個開發／測試用的 OpenAI-compatible adapter，見 `backend/README.md`「AI Provider Adapter Contract」；這不等於本項決策已核准，正式供應商與健康資料/隱私協議仍待診所確認。）
+3. 選擇 production AI provider，以及適用的健康資料與隱私協議。（目前後端已用 provider-neutral 介面接上一個開發／測試用的 OpenAI-compatible adapter，見 `backend/README.md`「AI Provider Adapter Contract」；語音輸入的轉錄功能也沿用同一組開發／測試用介接（見「Voice Transcription Endpoint」），代表使用者錄音會經過本服務後端與該 AI 供應商。這不等於本項決策已核准，正式供應商與健康資料/隱私協議（含音訊資料）仍待診所確認。）
 4. 定義資料 retention/deletion、緊急情況、取消／改期轉接與員工支援政策。

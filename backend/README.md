@@ -312,6 +312,7 @@ Base path 為 `/api/v1`，只接受 HTTPS UTF-8 JSON。Request body 上限 64 Ki
 | `GET` | `/booking-sessions/{id}` | 取得 session |
 | `PATCH` | `/booking-sessions/{id}` | 使用 `If-Match` 更新 session |
 | `POST` | `/booking-sessions/{id}/messages` | 傳送英文患者訊息 |
+| `POST` | `/voice/transcriptions` | 上傳錄音，回傳 AI 轉錄文字 |
 | `POST` | `/appointments` | 使用 `If-Match` 與 `Idempotency-Key` 確認預約 |
 
 Appointment body 只含 UUID `bookingSessionId`，不包含 version。Booking session 的 `selectedSlot` 必須含 UUID `professionalId`、RFC 3339 `start`/`end` 與 IANA `timeZone`。
@@ -336,7 +337,7 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 | `422` | `VALIDATION_FAILED` |
 | `428` | `PRECONDITION_REQUIRED` |
 | `429` | `RATE_LIMITED` |
-| `503` | `AVAILABILITY_UNAVAILABLE` |
+| `503` | `AVAILABILITY_UNAVAILABLE` / `VOICE_TRANSCRIPTION_UNAVAILABLE` |
 | `500` | `INTERNAL_ERROR` |
 
 ### Catalog Endpoint Schemas
@@ -487,6 +488,21 @@ Provider-neutral port（`internal/service/conversation.AIProvider`）只負責�
 第一版由 `internal/ai` 提供唯一的具體實作：一個 OpenAI-compatible Chat Completions HTTP client，要求模型以固定 JSON schema 回傳擷取結果。啟動時必須設定 `AI_PROVIDER_API_KEY`、`AI_PROVIDER_BASE_URL`、`AI_PROVIDER_MODEL`，缺少任一值 `cmd/api` 必須直接啟動失敗，比照 `CLINIC_TIMEZONE`／`DATABASE_URL` 的 fail-closed 慣例，不得使用隱性預設值。呼叫逾時或回傳內容無法解析為預期 JSON schema 時，視為擷取失敗：conversation service 必須 fallback 成一句固定的澄清回覆，不得把例外往上拋成 `500`，也不得套用任何候選值到 session。
 
 **這是本階段的開發／測試用介接選擇，不是根目錄 README「實作前必須決定的事項」第 3 項核准的正式 production AI provider**；正式供應商選型與適用的健康資料／隱私協議仍待診所核准，核准前不得把本 adapter 的預設值當成 production 承諾對外宣稱。
+
+### Voice Transcription Endpoint
+
+`POST /voice/transcriptions`（不需 session id、不需 `If-Match`——轉錄本身無狀態，patient 端須再把回傳文字送進既有 `/booking-sessions/{id}/messages` 才會影響 booking session）接受 `multipart/form-data`，欄位 `audio` 為錄音檔案：
+
+- Request body 上限 **10 MiB**——這是本 endpoint 專屬的例外上限，不是放寬本節開頭記載的全域 64 KiB JSON body 上限；超過回傳 `413 REQUEST_TOO_LARGE`。
+- `audio` 的 `Content-Type` 僅接受 `audio/webm`、`audio/ogg`、`audio/mp4`、`audio/wav`、`audio/mpeg` 白名單；不在白名單或缺少檔案回傳 `400 INVALID_REQUEST`。
+- 成功回傳 `200`：
+
+  ```json
+  { "text": "I'd like to book a cleaning next Tuesday afternoon" }
+  ```
+
+- 呼叫底層 AI 轉錄供應商逾時或失敗，回傳 `503 VOICE_TRANSCRIPTION_UNAVAILABLE`——與 §AI Provider Adapter Contract 對話擷取失敗時靜默 fallback 成澄清樣板不同，轉錄端點的唯一產出就是文字本身，失敗時沒有樣板可以代替，因此明確以 503 告知前端改走文字輸入；文字輸入路徑不受影響，任何時候都完整可用。
+- 底層實作沿用 `internal/ai` 既有的 OpenAI-compatible provider（同一組 `AI_PROVIDER_BASE_URL`／`AI_PROVIDER_API_KEY`），另外要求 `AI_PROVIDER_TRANSCRIPTION_MODEL` 環境變數，缺少時 `cmd/api` 比照其他 AI/clinic 設定直接啟動失敗，不得使用隱性預設值。轉錄請求固定帶 `language=en`，因患者端僅支援英文。**同樣是本階段開發／測試用介接選擇，非正式核准的 production 供應商**；音訊資料涉及的健康資料／隱私協議與 §AI Provider Adapter Contract 所述情況相同，仍待診所核准。
 
 Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不預設共用同一 OAuth flow。各 provider 必須使用 least-privilege access，並記錄 credential owner、rotation、revocation、reauthorization 與 tenant/calendar access boundary。
 
