@@ -5,6 +5,7 @@ import {
   patchBookingSession,
   type BookingSessionPatch,
 } from '../api/bookingSessions'
+import { GENERIC_ERROR_MESSAGE, SLOT_TAKEN_MESSAGE } from '../api/errorMessages'
 import type { Appointment, AvailabilitySlot } from '../api/types'
 import { useBookingDispatch, useBookingState } from '../state/BookingContext'
 import type { BookingAction } from '../state/types'
@@ -25,10 +26,7 @@ function dispatchApiError(err: unknown, dispatch: Dispatch<BookingAction>): void
       return
     }
     if (err.code === 'SLOT_NO_LONGER_AVAILABLE') {
-      dispatch({
-        type: 'SLOT_TAKEN',
-        detail: 'That time slot was just booked by someone else. Please choose another.',
-      })
+      dispatch({ type: 'SLOT_TAKEN', detail: SLOT_TAKEN_MESSAGE })
       return
     }
     dispatch({
@@ -45,7 +43,7 @@ function dispatchApiError(err: unknown, dispatch: Dispatch<BookingAction>): void
 
   dispatch({
     type: 'ERROR_OCCURRED',
-    errorInfo: { code: 'INTERNAL_ERROR', detail: 'Something unexpected happened. Please try again.' },
+    errorInfo: { code: 'INTERNAL_ERROR', detail: GENERIC_ERROR_MESSAGE },
   })
 }
 

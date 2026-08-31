@@ -40,6 +40,27 @@ function parseETag(response: Response): number | null {
   return Number.isNaN(value) ? null : value
 }
 
+// Shared by apiFetch and transcribeAudio (voice.ts): both make their own
+// fetch() call (voice.ts can't reuse apiFetch's forced JSON Content-Type,
+// which would break its multipart/form-data boundary) but need the same
+// "throw ApiError from a non-2xx response" handling.
+export async function throwApiErrorFromResponse(response: Response, path: string): Promise<never> {
+  let problem: ProblemDetails
+  try {
+    problem = (await response.json()) as ProblemDetails
+  } catch {
+    throw new ApiError({
+      type: 'about:blank',
+      title: response.statusText,
+      status: response.status,
+      code: 'INTERNAL_ERROR',
+      detail: 'The server returned an unexpected response.',
+      instance: path,
+    })
+  }
+  throw new ApiError(problem)
+}
+
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<ApiResult<T>> {
   let response: Response
   try {
@@ -57,20 +78,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   const etag = parseETag(response)
 
   if (!response.ok) {
-    let problem: ProblemDetails
-    try {
-      problem = (await response.json()) as ProblemDetails
-    } catch {
-      throw new ApiError({
-        type: 'about:blank',
-        title: response.statusText,
-        status: response.status,
-        code: 'INTERNAL_ERROR',
-        detail: 'The server returned an unexpected response.',
-        instance: path,
-      })
-    }
-    throw new ApiError(problem)
+    await throwApiErrorFromResponse(response, path)
   }
 
   if (response.status === 204) {

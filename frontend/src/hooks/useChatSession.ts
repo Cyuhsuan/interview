@@ -3,6 +3,7 @@ import { createAppointment } from '../api/appointments'
 import { createBookingSession, patchBookingSession } from '../api/bookingSessions'
 import { ApiError, NetworkError } from '../api/client'
 import { sendMessage } from '../api/conversation'
+import { GENERIC_ERROR_MESSAGE, SLOT_TAKEN_MESSAGE } from '../api/errorMessages'
 import type { Appointment, AvailabilitySlot, BookingSession } from '../api/types'
 import { generateIdempotencyKey } from '../utils/idempotencyKey'
 
@@ -38,7 +39,7 @@ function describeError(err: unknown): string {
       return 'This chat session has expired. Please refresh the page to start a new conversation.'
     }
     if (err.code === 'SLOT_NO_LONGER_AVAILABLE') {
-      return 'That time slot was just booked by someone else. Please choose another.'
+      return SLOT_TAKEN_MESSAGE
     }
     if (err.code === 'AVAILABILITY_UNAVAILABLE') {
       return "We can't confirm available times right now. Please contact the clinic directly to book."
@@ -48,7 +49,7 @@ function describeError(err: unknown): string {
   if (err instanceof NetworkError) {
     return err.message
   }
-  return 'Something unexpected happened. Please try again.'
+  return GENERIC_ERROR_MESSAGE
 }
 
 export function useChatSession() {

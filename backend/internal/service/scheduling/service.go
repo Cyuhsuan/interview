@@ -151,7 +151,7 @@ func (s *Service) GetAvailability(ctx context.Context, serviceCode, date string)
 
 		for start := earliestStart; !start.Add(duration).After(dayClose); start = start.Add(s.slotInterval) {
 			end := start.Add(duration)
-			if overlapsAny(start, end, blocked) || overlapsAppointments(start, end, confirmed) {
+			if overlapsInterval(start, end, blocked, blockedSlotBounds) || overlapsInterval(start, end, confirmed, appointmentBounds) {
 				continue
 			}
 			slots = append(slots, Slot{ProfessionalID: professional.ID, Start: start, End: end})
@@ -187,20 +187,24 @@ func roundUpToInterval(t time.Time, interval time.Duration) time.Time {
 	return t.Truncate(interval).Add(interval)
 }
 
-func overlapsAny(start, end time.Time, blocked []model.ProfessionalBlockedSlot) bool {
-	for _, b := range blocked {
-		if start.Before(b.EndAt) && b.StartAt.Before(end) {
+// overlapsInterval reports whether [start, end) overlaps any half-open
+// interval in items, per README's overlap rule. bounds extracts an item's
+// [itemStart, itemEnd) so the same interval-overlap test can be shared by
+// blocked slots and confirmed appointments instead of duplicating it per type.
+func overlapsInterval[T any](start, end time.Time, items []T, bounds func(T) (time.Time, time.Time)) bool {
+	for _, item := range items {
+		itemStart, itemEnd := bounds(item)
+		if start.Before(itemEnd) && itemStart.Before(end) {
 			return true
 		}
 	}
 	return false
 }
 
-func overlapsAppointments(start, end time.Time, appointments []model.Appointment) bool {
-	for _, a := range appointments {
-		if start.Before(a.EndAt) && a.StartAt.Before(end) {
-			return true
-		}
-	}
-	return false
+func blockedSlotBounds(b model.ProfessionalBlockedSlot) (time.Time, time.Time) {
+	return b.StartAt, b.EndAt
+}
+
+func appointmentBounds(a model.Appointment) (time.Time, time.Time) {
+	return a.StartAt, a.EndAt
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"backend/internal/handler/slotdto"
 	"backend/internal/model"
 	"backend/internal/platform/httpproblem"
 	bookingsvc "backend/internal/service/booking"
@@ -24,21 +25,14 @@ import (
 // format: 16-128 ASCII characters, letters/digits/./_/:/-only.
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{16,128}$`)
 
-type slotDTO struct {
-	ProfessionalID string `json:"professionalId"`
-	Start          string `json:"start"`
-	End            string `json:"end"`
-	TimeZone       string `json:"timeZone"`
-}
-
 type sessionResponse struct {
-	ID           string   `json:"id"`
-	Status       string   `json:"status"`
-	ServiceCode  *string  `json:"serviceCode"`
-	SelectedSlot *slotDTO `json:"selectedSlot"`
-	PatientName  *string  `json:"patientName"`
-	PatientEmail *string  `json:"patientEmail"`
-	ExpiresAt    string   `json:"expiresAt"`
+	ID           string        `json:"id"`
+	Status       string        `json:"status"`
+	ServiceCode  *string       `json:"serviceCode"`
+	SelectedSlot *slotdto.Slot `json:"selectedSlot"`
+	PatientName  *string       `json:"patientName"`
+	PatientEmail *string       `json:"patientEmail"`
+	ExpiresAt    string        `json:"expiresAt"`
 }
 
 type appointmentResponse struct {
@@ -206,7 +200,7 @@ func (h *Handler) confirmAppointment(c *gin.Context) {
 		return
 	}
 
-	serviceCode, err := h.serviceCodeForID(c.Request.Context(), &appt.ServiceID)
+	serviceCode, err := slotdto.ServiceCodeForID(c.Request.Context(), h.catalog, &appt.ServiceID)
 	if err != nil {
 		httpproblem.WriteInternal(c, err)
 		return
@@ -268,55 +262,20 @@ func (h *Handler) writeAppointmentError(c *gin.Context, err error) {
 }
 
 func (h *Handler) toSessionResponse(ctx context.Context, session *model.BookingSession) (sessionResponse, error) {
-	var serviceCode *string
-	if session.ServiceID != nil {
-		code, err := h.serviceCodeForID(ctx, session.ServiceID)
-		if err != nil {
-			return sessionResponse{}, err
-		}
-		serviceCode = code
-	}
-
-	var slot *slotDTO
-	if session.ProfessionalID != nil && session.SlotStartAt != nil && session.SlotEndAt != nil {
-		timeZone := ""
-		if session.SlotTimeZone != nil {
-			timeZone = *session.SlotTimeZone
-		}
-		slot = &slotDTO{
-			ProfessionalID: *session.ProfessionalID,
-			Start:          session.SlotStartAt.Format(time.RFC3339),
-			End:            session.SlotEndAt.Format(time.RFC3339),
-			TimeZone:       timeZone,
-		}
+	serviceCode, err := slotdto.ServiceCodeForID(ctx, h.catalog, session.ServiceID)
+	if err != nil {
+		return sessionResponse{}, err
 	}
 
 	return sessionResponse{
 		ID:           session.ID,
 		Status:       session.Status,
 		ServiceCode:  serviceCode,
-		SelectedSlot: slot,
+		SelectedSlot: slotdto.FromSession(session),
 		PatientName:  session.PatientName,
 		PatientEmail: session.PatientEmail,
 		ExpiresAt:    session.ExpiresAt.Format(time.RFC3339),
 	}, nil
-}
-
-func (h *Handler) serviceCodeForID(ctx context.Context, serviceID *string) (*string, error) {
-	if serviceID == nil {
-		return nil, nil
-	}
-	services, err := h.catalog.ListActiveServices(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, svc := range services {
-		if svc.ID == *serviceID {
-			code := svc.Code
-			return &code, nil
-		}
-	}
-	return nil, nil
 }
 
 func etagFor(version int64) string {

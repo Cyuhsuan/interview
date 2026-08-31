@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"backend/internal/handler/slotdto"
 	"backend/internal/platform/httpproblem"
 	bookingsvc "backend/internal/service/booking"
 	catalogsvc "backend/internal/service/catalog"
@@ -22,28 +23,21 @@ import (
 
 const maxMessageCodePoints = 2000
 
-type slotDTO struct {
-	ProfessionalID string `json:"professionalId"`
-	Start          string `json:"start"`
-	End            string `json:"end"`
-	TimeZone       string `json:"timeZone"`
-}
-
 type messageRequest struct {
 	Message string `json:"message"`
 }
 
 type messageResponse struct {
-	ID           string    `json:"id"`
-	Status       string    `json:"status"`
-	ServiceCode  *string   `json:"serviceCode"`
-	SelectedSlot *slotDTO  `json:"selectedSlot"`
-	PatientName  *string   `json:"patientName"`
-	PatientEmail *string   `json:"patientEmail"`
-	ExpiresAt    string    `json:"expiresAt"`
-	Reply        string    `json:"reply"`
-	OfferedSlots []slotDTO `json:"offeredSlots"`
-	OutOfScope   bool      `json:"outOfScope"`
+	ID           string         `json:"id"`
+	Status       string         `json:"status"`
+	ServiceCode  *string        `json:"serviceCode"`
+	SelectedSlot *slotdto.Slot  `json:"selectedSlot"`
+	PatientName  *string        `json:"patientName"`
+	PatientEmail *string        `json:"patientEmail"`
+	ExpiresAt    string         `json:"expiresAt"`
+	Reply        string         `json:"reply"`
+	OfferedSlots []slotdto.Slot `json:"offeredSlots"`
+	OutOfScope   bool           `json:"outOfScope"`
 }
 
 type Handler struct {
@@ -109,32 +103,14 @@ func (h *Handler) writeError(c *gin.Context, err error) {
 func (h *Handler) toResponse(ctx context.Context, reply conversationsvc.Reply) (messageResponse, error) {
 	session := reply.Session
 
-	var serviceCode *string
-	if session.ServiceID != nil {
-		code, err := h.serviceCodeForID(ctx, *session.ServiceID)
-		if err != nil {
-			return messageResponse{}, err
-		}
-		serviceCode = code
+	serviceCode, err := slotdto.ServiceCodeForID(ctx, h.catalog, session.ServiceID)
+	if err != nil {
+		return messageResponse{}, err
 	}
 
-	var slot *slotDTO
-	if session.ProfessionalID != nil && session.SlotStartAt != nil && session.SlotEndAt != nil {
-		timeZone := ""
-		if session.SlotTimeZone != nil {
-			timeZone = *session.SlotTimeZone
-		}
-		slot = &slotDTO{
-			ProfessionalID: *session.ProfessionalID,
-			Start:          session.SlotStartAt.Format(time.RFC3339),
-			End:            session.SlotEndAt.Format(time.RFC3339),
-			TimeZone:       timeZone,
-		}
-	}
-
-	offered := make([]slotDTO, 0, len(reply.OfferedSlots))
+	offered := make([]slotdto.Slot, 0, len(reply.OfferedSlots))
 	for _, s := range reply.OfferedSlots {
-		offered = append(offered, slotDTO{
+		offered = append(offered, slotdto.Slot{
 			ProfessionalID: s.ProfessionalID,
 			Start:          s.Start.Format(time.RFC3339),
 			End:            s.End.Format(time.RFC3339),
@@ -146,7 +122,7 @@ func (h *Handler) toResponse(ctx context.Context, reply conversationsvc.Reply) (
 		ID:           session.ID,
 		Status:       session.Status,
 		ServiceCode:  serviceCode,
-		SelectedSlot: slot,
+		SelectedSlot: slotdto.FromSession(session),
 		PatientName:  session.PatientName,
 		PatientEmail: session.PatientEmail,
 		ExpiresAt:    session.ExpiresAt.Format(time.RFC3339),
@@ -154,18 +130,4 @@ func (h *Handler) toResponse(ctx context.Context, reply conversationsvc.Reply) (
 		OfferedSlots: offered,
 		OutOfScope:   reply.OutOfScope,
 	}, nil
-}
-
-func (h *Handler) serviceCodeForID(ctx context.Context, serviceID string) (*string, error) {
-	services, err := h.catalog.ListActiveServices(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, svc := range services {
-		if svc.ID == serviceID {
-			code := svc.Code
-			return &code, nil
-		}
-	}
-	return nil, nil
 }

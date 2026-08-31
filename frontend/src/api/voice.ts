@@ -1,5 +1,4 @@
-import { ApiError, NetworkError } from './client'
-import type { ProblemDetails } from './types'
+import { NetworkError, throwApiErrorFromResponse } from './client'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL
 
@@ -21,20 +20,7 @@ export async function transcribeAudio(audio: Blob): Promise<string> {
   }
 
   if (!response.ok) {
-    let problem: ProblemDetails
-    try {
-      problem = (await response.json()) as ProblemDetails
-    } catch {
-      throw new ApiError({
-        type: 'about:blank',
-        title: response.statusText,
-        status: response.status,
-        code: 'INTERNAL_ERROR',
-        detail: 'The server returned an unexpected response.',
-        instance: '/voice/transcriptions',
-      })
-    }
-    throw new ApiError(problem)
+    await throwApiErrorFromResponse(response, '/voice/transcriptions')
   }
 
   const data = (await response.json()) as { text: string }
