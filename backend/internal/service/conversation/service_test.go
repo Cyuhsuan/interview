@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,7 +157,7 @@ func newTestService(t *testing.T, bookingRepo *fakeBookingRepo, ai AIProvider) *
 
 	booking := bookingsvc.NewService(bookingRepo, catalog, scheduling, &fakeIDGenerator{}, loc, 15*time.Minute)
 
-	return NewService(booking, scheduling, catalog, ai, loc)
+	return NewService(booking, scheduling, catalog, ai, loc, "UTC")
 }
 
 func newCollectingSession(id string) model.BookingSession {
@@ -289,6 +290,177 @@ func TestSendMessage_ExpiredSessionPropagatesAsError(t *testing.T) {
 	_, err := svc.SendMessage(context.Background(), "s1", "hello")
 	if !errors.Is(err, bookingsvc.ErrSessionExpired) {
 		t.Fatalf("expected ErrSessionExpired, got %v", err)
+	}
+}
+
+func TestSendMessage_OrdinalResolvesAgainstChronologicallySortedStoredSlots(t *testing.T) {
+	repo := newFakeBookingRepo()
+	session := newCollectingSession("s1")
+	session.ServiceID = ptr(testServiceID)
+	loc, _ := time.LoadLocation("UTC")
+	early := time.Date(2026, 9, 2, 9, 0, 0, 0, loc)
+	later := time.Date(2026, 9, 2, 10, 0, 0, 0, loc)
+	// Stored out of chronological order on purpose, to prove resolution
+	// sorts by start time rather than trusting array order.
+	stored := []bookingsvc.SelectedSlot{
+		{ProfessionalID: testProfessionalID, Start: later, End: later.Add(time.Hour), TimeZone: "UTC"},
+		{ProfessionalID: testProfessionalID, Start: early, End: early.Add(time.Hour), TimeZone: "UTC"},
+	}
+	encoded, err := bookingsvc.EncodeOfferedSlots(stored)
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	session.OfferedSlots = encoded
+	repo.sessions["s1"] = session
+
+	ordinal := 1
+	ai := &fakeAI{extraction: Extraction{OfferedSlotOrdinal: &ordinal}}
+	svc := newTestService(t, repo, ai)
+
+	reply, err := svc.SendMessage(context.Background(), "s1", "the first one")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply.Session.SlotStartAt == nil || !reply.Session.SlotStartAt.Equal(early) {
+		t.Fatalf("expected the chronologically earliest stored slot to be selected, got %v", reply.Session.SlotStartAt)
+	}
+	if len(reply.Session.OfferedSlots) != 0 {
+		t.Fatalf("expected stored offer to be cleared after selection")
+	}
+}
+
+func TestSendMessage_OrdinalOutOfRangeFallsBackToNormalFlow(t *testing.T) {
+	repo := newFakeBookingRepo()
+	session := newCollectingSession("s1")
+	session.ServiceID = ptr(testServiceID)
+	loc, _ := time.LoadLocation("UTC")
+	a := time.Date(2026, 9, 2, 9, 0, 0, 0, loc)
+	b := time.Date(2026, 9, 2, 10, 0, 0, 0, loc)
+	stored := []bookingsvc.SelectedSlot{
+		{ProfessionalID: testProfessionalID, Start: a, End: a.Add(time.Hour), TimeZone: "UTC"},
+		{ProfessionalID: testProfessionalID, Start: b, End: b.Add(time.Hour), TimeZone: "UTC"},
+	}
+	encoded, err := bookingsvc.EncodeOfferedSlots(stored)
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	session.OfferedSlots = encoded
+	repo.sessions["s1"] = session
+
+	ordinal := 5
+	ai := &fakeAI{extraction: Extraction{OfferedSlotOrdinal: &ordinal}}
+	svc := newTestService(t, repo, ai)
+
+	reply, err := svc.SendMessage(context.Background(), "s1", "the fifth one")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply.Session.SlotStartAt != nil {
+		t.Fatalf("out-of-range ordinal must not select a slot, got %v", reply.Session.SlotStartAt)
+	}
+	if len(reply.Session.OfferedSlots) == 0 {
+		t.Fatalf("expected stored offer to remain unchanged")
+	}
+}
+
+func TestSendMessage_StaleResolvedSlotTriggersReoffer(t *testing.T) {
+	repo := newFakeBookingRepo()
+	session := newCollectingSession("s1")
+	session.ServiceID = ptr(testServiceID)
+	loc, _ := time.LoadLocation("UTC")
+	staleStart := time.Date(2026, 9, 2, 9, 0, 0, 0, loc)
+	// A different professional ID guarantees this can never match anything
+	// findMatchingSlot re-checks against fresh GetAvailability.
+	stored := []bookingsvc.SelectedSlot{
+		{ProfessionalID: "someone-else", Start: staleStart, End: staleStart.Add(time.Hour), TimeZone: "UTC"},
+	}
+	encoded, err := bookingsvc.EncodeOfferedSlots(stored)
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	session.OfferedSlots = encoded
+	repo.sessions["s1"] = session
+
+	ordinal := 1
+	ai := &fakeAI{extraction: Extraction{OfferedSlotOrdinal: &ordinal}}
+	svc := newTestService(t, repo, ai)
+
+	reply, err := svc.SendMessage(context.Background(), "s1", "the first one")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply.Session.SlotStartAt != nil {
+		t.Fatalf("a stale candidate must not be applied, got %v", reply.Session.SlotStartAt)
+	}
+	if len(reply.OfferedSlots) == 0 {
+		t.Fatalf("expected a fresh set of offered slots after a stale resolution")
+	}
+	if !strings.Contains(reply.Text, "just taken") {
+		t.Fatalf("expected the stale-slot template in reply text, got %q", reply.Text)
+	}
+}
+
+func TestSendMessage_TimeOfDayNarrowsStoredSlotsToExactlyOneAutoSelects(t *testing.T) {
+	repo := newFakeBookingRepo()
+	session := newCollectingSession("s1")
+	session.ServiceID = ptr(testServiceID)
+	loc, _ := time.LoadLocation("UTC")
+	morning := time.Date(2026, 9, 2, 9, 0, 0, 0, loc)
+	afternoon := time.Date(2026, 9, 2, 14, 0, 0, 0, loc)
+	stored := []bookingsvc.SelectedSlot{
+		{ProfessionalID: testProfessionalID, Start: afternoon, End: afternoon.Add(time.Hour), TimeZone: "UTC"},
+		{ProfessionalID: testProfessionalID, Start: morning, End: morning.Add(time.Hour), TimeZone: "UTC"},
+	}
+	encoded, err := bookingsvc.EncodeOfferedSlots(stored)
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	session.OfferedSlots = encoded
+	repo.sessions["s1"] = session
+
+	tod := "morning"
+	ai := &fakeAI{extraction: Extraction{TimeOfDay: &tod}}
+	svc := newTestService(t, repo, ai)
+
+	reply, err := svc.SendMessage(context.Background(), "s1", "the morning one")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply.Session.SlotStartAt == nil || !reply.Session.SlotStartAt.Equal(morning) {
+		t.Fatalf("expected the morning slot to be auto-selected, got %v", reply.Session.SlotStartAt)
+	}
+}
+
+func TestSendMessage_OrdinalIgnoredWhenNewDateAlsoGiven(t *testing.T) {
+	repo := newFakeBookingRepo()
+	session := newCollectingSession("s1")
+	session.ServiceID = ptr(testServiceID)
+	loc, _ := time.LoadLocation("UTC")
+	staleStored := time.Date(2026, 9, 2, 9, 0, 0, 0, loc)
+	stored := []bookingsvc.SelectedSlot{
+		{ProfessionalID: testProfessionalID, Start: staleStored, End: staleStored.Add(time.Hour), TimeZone: "UTC"},
+	}
+	encoded, err := bookingsvc.EncodeOfferedSlots(stored)
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	session.OfferedSlots = encoded
+	repo.sessions["s1"] = session
+
+	ordinal := 1
+	date := "2026-09-02"
+	ai := &fakeAI{extraction: Extraction{OfferedSlotOrdinal: &ordinal, DateISO: &date}}
+	svc := newTestService(t, repo, ai)
+
+	reply, err := svc.SendMessage(context.Background(), "s1", "how about Sept 2nd, the first one")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply.Session.SlotStartAt != nil {
+		t.Fatalf("ordinal resolution must be skipped when a new date is also given, got %v", reply.Session.SlotStartAt)
+	}
+	if len(reply.OfferedSlots) == 0 {
+		t.Fatalf("expected the normal new-date offeredSlots flow to run")
 	}
 }
 

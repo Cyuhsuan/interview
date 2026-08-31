@@ -39,6 +39,12 @@ type Extraction struct {
 	TimeOfDay    *string // "morning" | "afternoon" | "evening"
 	PatientName  *string
 	PatientEmail *string
+	// OfferedSlotOrdinal is a positional reference to the previous turn's
+	// offeredSlots ("the first one" -> 1, ... "the fifth one" -> 5, "the
+	// last one" -> -1), resolved against the server's own chronological
+	// ordering — see backend/README.md's /messages contract. Nil when the
+	// message doesn't clearly reference a prior offer by position.
+	OfferedSlotOrdinal *int
 }
 
 // AIProvider is the provider-neutral port from backend/README.md's "AI
@@ -80,6 +86,7 @@ type Service struct {
 	catalog    *catalogsvc.Service
 	ai         AIProvider
 	location   *time.Location
+	timeZone   string
 	now        func() time.Time
 }
 
@@ -89,6 +96,7 @@ func NewService(
 	catalog *catalogsvc.Service,
 	ai AIProvider,
 	location *time.Location,
+	timeZone string,
 ) *Service {
 	return &Service{
 		booking:    booking,
@@ -96,6 +104,7 @@ func NewService(
 		catalog:    catalog,
 		ai:         ai,
 		location:   location,
+		timeZone:   timeZone,
 		now:        time.Now,
 	}
 }
@@ -148,23 +157,70 @@ func (s *Service) SendMessage(ctx context.Context, sessionID, message string) (R
 		}
 	}
 
+	// Try resolving a positional/time-of-day reference to the previous
+	// turn's stored offeredSlots (e.g. "the first one", "the morning
+	// one") — only when this turn isn't also starting a new
+	// service/date query, so this never overlaps with the flow below.
+	staleSlotOffered := false
+	var resolvedOffered []schedulingsvc.Slot
+	if extraction.ServiceCode == nil && extraction.DateISO == nil &&
+		session.ServiceID != nil && len(session.OfferedSlots) > 0 &&
+		(extraction.OfferedSlotOrdinal != nil || extraction.TimeOfDay != nil) {
+
+		if stored, decodeErr := bookingsvc.DecodeOfferedSlots(session.OfferedSlots); decodeErr == nil {
+			if candidate, ok := resolveOfferedSlot(stored, extraction.OfferedSlotOrdinal, extraction.TimeOfDay, s.location); ok {
+				if code := serviceCodeByID(services, *session.ServiceID); code != "" {
+					dateISO := candidate.Start.In(s.location).Format("2006-01-02")
+					slots, err := s.scheduling.GetAvailability(ctx, code, dateISO)
+					if err != nil {
+						return Reply{}, fmt.Errorf("get availability: %w", err)
+					}
+					// Fail-closed: never trust the stored candidate, always
+					// re-check it against a fresh GetAvailability call
+					// before applying it.
+					if match := findMatchingSlot(slots, candidate); match != nil {
+						patch.SelectedSlot = &bookingsvc.SelectedSlot{
+							ProfessionalID: match.ProfessionalID,
+							Start:          match.Start,
+							End:            match.End,
+							TimeZone:       s.timeZone,
+						}
+						empty := []bookingsvc.SelectedSlot{}
+						patch.OfferedSlots = &empty
+					} else {
+						staleSlotOffered = true
+						resolvedOffered = capOffered(filterByTimeOfDay(slots, nil, s.location))
+						snapshot := toSelectedSlots(resolvedOffered, s.timeZone)
+						patch.OfferedSlots = &snapshot
+					}
+				}
+			}
+		}
+	}
+
 	updated := s.applyPatch(ctx, session, patch)
 
-	var offered []schedulingsvc.Slot
-	if updated.ServiceID != nil && extraction.DateISO != nil {
+	offered := resolvedOffered
+	if len(offered) == 0 && !staleSlotOffered && updated.ServiceID != nil && extraction.DateISO != nil {
 		if code := serviceCodeByID(services, *updated.ServiceID); code != "" {
 			slots, err := s.scheduling.GetAvailability(ctx, code, *extraction.DateISO)
 			if err != nil {
 				return Reply{}, fmt.Errorf("get availability: %w", err)
 			}
-			offered = filterByTimeOfDay(slots, extraction.TimeOfDay, s.location)
-			if len(offered) > maxOfferedSlots {
-				offered = offered[:maxOfferedSlots]
+			offered = capOffered(filterByTimeOfDay(slots, extraction.TimeOfDay, s.location))
+			if len(offered) > 0 {
+				// Best-effort: persist this turn's offer so a later turn
+				// can resolve an ordinal/time-of-day reference against it.
+				// A failure here has no booking-legality impact — any
+				// future resolution always re-verifies live availability
+				// regardless of what's stored.
+				snapshot := toSelectedSlots(offered, s.timeZone)
+				updated = s.applyPatch(ctx, updated, bookingsvc.SessionPatch{OfferedSlots: &snapshot})
 			}
 		}
 	}
 
-	text := s.buildReply(services, updated, offered, extraction.DateISO != nil)
+	text := s.buildReply(services, updated, offered, extraction.DateISO != nil, staleSlotOffered)
 	return Reply{Session: updated, Text: text, OfferedSlots: offered}, nil
 }
 
@@ -177,7 +233,8 @@ func (s *Service) SendMessage(ctx context.Context, sessionID, message string) (R
 // freshly re-read session, since chat has no client-visible If-Match to
 // resolve it with.
 func (s *Service) applyPatch(ctx context.Context, session *model.BookingSession, patch bookingsvc.SessionPatch) *model.BookingSession {
-	if patch.ServiceCode == nil && patch.PatientName == nil && patch.PatientEmail == nil {
+	if patch.ServiceCode == nil && patch.PatientName == nil && patch.PatientEmail == nil &&
+		patch.SelectedSlot == nil && patch.OfferedSlots == nil {
 		return session
 	}
 
@@ -200,7 +257,7 @@ func (s *Service) applyPatch(ctx context.Context, session *model.BookingSession,
 	return retried
 }
 
-func (s *Service) buildReply(services []model.Service, session *model.BookingSession, offered []schedulingsvc.Slot, dateGiven bool) string {
+func (s *Service) buildReply(services []model.Service, session *model.BookingSession, offered []schedulingsvc.Slot, dateGiven bool, staleSlotOffered bool) string {
 	if session.ServiceID == nil {
 		return "Which service would you like to book? We offer " + serviceNameList(services) + "."
 	}
@@ -208,6 +265,8 @@ func (s *Service) buildReply(services []model.Service, session *model.BookingSes
 	code := serviceCodeByID(services, *session.ServiceID)
 	if session.ProfessionalID == nil || session.SlotStartAt == nil {
 		switch {
+		case staleSlotOffered && len(offered) > 0:
+			return fmt.Sprintf("Sorry, that time was just taken. Here are the remaining available times for Service %s — please pick one below.", code)
 		case len(offered) > 0:
 			return fmt.Sprintf("Here are some available times for Service %s — please pick one below.", code)
 		case dateGiven:
@@ -270,23 +329,108 @@ func filterByTimeOfDay(slots []schedulingsvc.Slot, timeOfDay *string, loc *time.
 	}
 	filtered := make([]schedulingsvc.Slot, 0, len(slots))
 	for _, slot := range slots {
-		hour := slot.Start.In(loc).Hour()
-		switch *timeOfDay {
-		case "morning":
-			if hour < 12 {
-				filtered = append(filtered, slot)
-			}
-		case "afternoon":
-			if hour >= 12 && hour < 17 {
-				filtered = append(filtered, slot)
-			}
-		case "evening":
-			if hour >= 17 {
-				filtered = append(filtered, slot)
-			}
-		default:
+		if timeOfDayMatches(slot.Start, *timeOfDay, loc) {
 			filtered = append(filtered, slot)
 		}
 	}
 	return filtered
+}
+
+// timeOfDayMatches is the shared morning/afternoon/evening bucket check
+// used both by filterByTimeOfDay (fresh availability) and
+// resolveOfferedSlot (a stored candidate list from the previous turn).
+func timeOfDayMatches(start time.Time, timeOfDay string, loc *time.Location) bool {
+	hour := start.In(loc).Hour()
+	switch timeOfDay {
+	case "morning":
+		return hour < 12
+	case "afternoon":
+		return hour >= 12 && hour < 17
+	case "evening":
+		return hour >= 17
+	default:
+		return true
+	}
+}
+
+func capOffered(slots []schedulingsvc.Slot) []schedulingsvc.Slot {
+	if len(slots) > maxOfferedSlots {
+		return slots[:maxOfferedSlots]
+	}
+	return slots
+}
+
+func toSelectedSlots(slots []schedulingsvc.Slot, timeZone string) []bookingsvc.SelectedSlot {
+	out := make([]bookingsvc.SelectedSlot, 0, len(slots))
+	for _, slot := range slots {
+		out = append(out, bookingsvc.SelectedSlot{
+			ProfessionalID: slot.ProfessionalID,
+			Start:          slot.Start,
+			End:            slot.End,
+			TimeZone:       timeZone,
+		})
+	}
+	return out
+}
+
+func findMatchingSlot(slots []schedulingsvc.Slot, candidate bookingsvc.SelectedSlot) *schedulingsvc.Slot {
+	for i := range slots {
+		if slots[i].ProfessionalID == candidate.ProfessionalID &&
+			slots[i].Start.Equal(candidate.Start) &&
+			slots[i].End.Equal(candidate.End) {
+			return &slots[i]
+		}
+	}
+	return nil
+}
+
+// resolveOfferedSlot resolves an ordinal or time-of-day reference against
+// stored, sorted chronologically ascending (tie-break by ProfessionalID for
+// determinism) — this is the server's own canonical ordering, independent
+// of whatever order/filter the patient's browser may have displayed. See
+// backend/README.md's /messages contract for this documented limitation.
+func resolveOfferedSlot(stored []bookingsvc.SelectedSlot, ordinal *int, timeOfDay *string, loc *time.Location) (bookingsvc.SelectedSlot, bool) {
+	if len(stored) == 0 {
+		return bookingsvc.SelectedSlot{}, false
+	}
+	sorted := slices.Clone(stored)
+	slices.SortFunc(sorted, func(a, b bookingsvc.SelectedSlot) int {
+		if a.Start.Before(b.Start) {
+			return -1
+		}
+		if a.Start.After(b.Start) {
+			return 1
+		}
+		return strings.Compare(a.ProfessionalID, b.ProfessionalID)
+	})
+
+	if ordinal != nil {
+		var idx int
+		switch {
+		case *ordinal == -1:
+			idx = len(sorted) - 1
+		case *ordinal >= 1 && *ordinal <= len(sorted):
+			idx = *ordinal - 1
+		default:
+			return bookingsvc.SelectedSlot{}, false
+		}
+		return sorted[idx], true
+	}
+
+	if timeOfDay != nil {
+		var match *bookingsvc.SelectedSlot
+		for i := range sorted {
+			if timeOfDayMatches(sorted[i].Start, *timeOfDay, loc) {
+				if match != nil {
+					return bookingsvc.SelectedSlot{}, false // ambiguous: more than one
+				}
+				match = &sorted[i]
+			}
+		}
+		if match != nil {
+			return *match, true
+		}
+	}
+
+	return bookingsvc.SelectedSlot{}, false
 }

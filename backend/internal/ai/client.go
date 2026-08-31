@@ -59,6 +59,7 @@ type extractionJSON struct {
 	TimeOfDay          *string `json:"timeOfDay"`
 	PatientName        *string `json:"patientName"`
 	PatientEmail       *string `json:"patientEmail"`
+	OfferedSlotOrdinal *int    `json:"offeredSlotOrdinal"`
 }
 
 type chatMessage struct {
@@ -139,6 +140,12 @@ func (c *Client) Extract(ctx context.Context, message string, ref time.Time, kno
 	if !validOutOfScopeCategories[extracted.OutOfScopeCategory] {
 		extracted.OutOfScopeCategory = ""
 	}
+	if extracted.OfferedSlotOrdinal != nil {
+		v := *extracted.OfferedSlotOrdinal
+		if v != -1 && (v < 1 || v > 5) {
+			extracted.OfferedSlotOrdinal = nil
+		}
+	}
 
 	return conversation.Extraction{
 		OutOfScopeCategory: extracted.OutOfScopeCategory,
@@ -147,6 +154,7 @@ func (c *Client) Extract(ctx context.Context, message string, ref time.Time, kno
 		TimeOfDay:          emptyToNil(extracted.TimeOfDay),
 		PatientName:        emptyToNil(extracted.PatientName),
 		PatientEmail:       emptyToNil(extracted.PatientEmail),
+		OfferedSlotOrdinal: extracted.OfferedSlotOrdinal,
 	}, nil
 }
 
@@ -170,9 +178,12 @@ Reply with ONLY a JSON object matching this exact shape, using null for anything
   "dateISO": string or null (YYYY-MM-DD),
   "timeOfDay": one of "morning" | "afternoon" | "evening" or null,
   "patientName": string or null,
-  "patientEmail": string or null
+  "patientEmail": string or null,
+  "offeredSlotOrdinal": integer or null (1 for "the first one"/"first option", 2 for "second", 3 for "third", 4 for "fourth", 5 for "fifth", -1 for "the last one"/"final one"/"latest option"; null if the message does not clearly refer to one of a previously offered list of appointment times by its position)
 }
 
-Set outOfScopeCategory whenever the message asks for diagnosis, medication/prescription advice, describes a medical emergency, asks for pricing/quotes, asks about insurance, or asks to cancel/reschedule an appointment. When outOfScopeCategory is set, still fill in any other fields you can read from the message.`,
+Set outOfScopeCategory whenever the message asks for diagnosis, medication/prescription advice, describes a medical emergency, asks for pricing/quotes, asks about insurance, or asks to cancel/reschedule an appointment. When outOfScopeCategory is set, still fill in any other fields you can read from the message.
+
+If the patient's message refers to a previously offered appointment time by its position (e.g. "the first one", "option 2", "the last one"), set offeredSlotOrdinal accordingly. Do not attempt to parse clock times like "9am" or "the 3pm one" — leave offeredSlotOrdinal null for those; timeOfDay already covers "the morning one" style references.`,
 		ref.Format(time.RFC3339), strings.Join(knownServiceCodes, ", "))
 }

@@ -472,7 +472,7 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 ```
 
 - `reply`：機器人回覆的英文文字。**一律由後端確定性樣板組成**——AI 只用來判斷本輪要用哪個樣板（例如「已擷取到 service，但缺 date」或「超出範圍分類為 emergency」），不得把 AI 生成的自由文字直接當作 `reply` 回傳，避免 AI 意外產出診斷、報價或其他超出範圍的內容。
-- `offeredSlots`：本輪由 Scheduling（`GET /availability` 同一套邏輯）算出的候選時段陣列，形狀同 `GET /availability` 的元素（`professionalId`/`start`/`end`/`timeZone`）；只有當 session 已知 `serviceCode` 且本輪訊息可解析出明確日期時才非空，其餘情況一律回傳 `[]`。選擇某個時段一律透過既有 `PATCH /booking-sessions/{id}`（帶 `selectedSlot`）完成，`/messages` 本身不會把時段寫入 session——**這是刻意的第一版限制**：因為不儲存對話歷史，无法用「選 option 2」這種指代前一輪選項的說法反查，所以由前端把 `offeredSlots` 渲染成可點擊的按鈕，直接呼叫 `PATCH` 送出結構化的 `selectedSlot`。
+- `offeredSlots`：本輪由 Scheduling（`GET /availability` 同一套邏輯）算出的候選時段陣列，形狀同 `GET /availability` 的元素（`professionalId`/`start`/`end`/`timeZone`）；只有當 session 已知 `serviceCode` 且本輪訊息可解析出明確日期時才非空，其餘情況一律回傳 `[]`。這份候選清單同時會存入 session 的 `offered_slots`（內部欄位，不對外回傳），作為**有限的「上一輪」記憶**——不是完整多輪對話歷史，只反查緊接在前一輪提供過的候選：若本輪訊息沒有再給新的 `serviceCode`／日期，且用序數（「the first one」）或時段（「the morning one」）指代其中之一，`/messages` 會依伺服器對候選清單依 `start` 由早到晚排序（同時間依 `professionalId` 排序求穩定）後的順位解析出對應候選，並在套用前重新呼叫一次 `GetAvailability` 現查確認仍可預約（fail-closed，不信任已儲存的候選）；若確認仍可預約才寫入 `selectedSlot` 並清空 `offered_slots`，若已被搶走則不套用、重新提供最新候選並清空舊的。序數只涵蓋 1–5（對應候選上限 `maxOfferedSlots`）與「最後一個」，不解析確切時間（如「9am」）；無法判斷或超出範圍時直接忽略，回到今天既有的正常流程，不視為錯誤。**已知限制**：若患者前端當下有套用執業者篩選，畫面上視覺的「第一個」可能與伺服器認定的順位不同，此情況不隱藏、寫在此處供實作與測試參考。除了這條指代路徑，選擇某個時段一律也能透過既有 `PATCH /booking-sessions/{id}`（帶 `selectedSlot`）完成，行為不變。
 - `outOfScope`：本輪訊息是否被分類為超出範圍（診斷、處方、緊急醫療、報價、保險或取消／改期要求之一）。分類為 `true` 時，`reply` 一律是該分類對應的固定樣板（引導患者直接聯絡診所，緊急情況建議立即就醫），且本輪**不會**修改任何 session 欄位，即使訊息中同時夾帶了服務或日期資訊。
 
 `ETag` header 一律帶 session 目前的 version（不論本輪是否真的修改了欄位）。AI 候選值若無法對應到合法的服務代碼或候選日期無法解析，**不是錯誤**——service 層直接忽略該候選值，`reply` 改為澄清問句請患者換句話說，HTTP 回應仍是 `200`。同理，若套用當下 session version 被其他請求搶先變更，service 內部重新讀取一次並重試一次即可，仍回傳 `200`（`reply` 提示請再說一次），不會把樂觀鎖衝突以 `412` 曝露給聊天使用者。真正會回傳非 `200` 的情況只有：請求格式本身不合法（`400`）、session 不存在或過期（`410`）、計算 `offeredSlots` 時 PostgreSQL 查詢失敗（依 fail-closed 規則回傳 `503 AVAILABILITY_UNAVAILABLE`，不得回傳臆測時段）、或非預期的伺服器錯誤（`500`）。
@@ -483,7 +483,7 @@ Provider-neutral ports 只負責將 PostgreSQL appointment 投影至外部系統
 
 ## AI Provider Adapter Contract
 
-Provider-neutral port（`internal/service/conversation.AIProvider`）只負責「單輪訊息 → 候選值＋範圍分類」：輸入一則患者訊息、一個 reference time 與目前已知的合法服務代碼列表，輸出候選的 `serviceCode`／日期／時段偏好（早上／下午／晚上）／患者姓名／email，以及是否屬於超出範圍分類。Port 不做多輪對話記憶、不做時段選擇、不判斷預約是否合法——這些一律由 `internal/service/conversation` 呼叫既有的 `internal/service/booking` 與 `internal/service/scheduling` 確定性邏輯完成，AI 輸出的候選值套用方式與 `PATCH /booking-sessions/{id}` 的欄位驗證完全一致。
+Provider-neutral port（`internal/service/conversation.AIProvider`）只負責「單輪訊息 → 候選值＋範圍分類」：輸入一則患者訊息、一個 reference time 與目前已知的合法服務代碼列表，輸出候選的 `serviceCode`／日期／時段偏好（早上／下午／晚上）／患者姓名／email／`offeredSlotOrdinal`（患者對上一輪候選時段的**位置**指代，1–5 或 -1 代表最後一個，僅位置指代，不解析確切時間），以及是否屬於超出範圍分類。Port 不做多輪對話記憶、不判斷預約是否合法——這些一律由 `internal/service/conversation` 呼叫既有的 `internal/service/booking` 與 `internal/service/scheduling` 確定性邏輯完成；`offeredSlotOrdinal` 同樣只是候選值，實際是否對應到一個仍可預約的時段，由 `internal/service/conversation` 現查 `GetAvailability` 後才決定是否套用，AI 本身不判斷任何時段是否合法或仍可預約。
 
 第一版由 `internal/ai` 提供唯一的具體實作：一個 OpenAI-compatible Chat Completions HTTP client，要求模型以固定 JSON schema 回傳擷取結果。啟動時必須設定 `AI_PROVIDER_API_KEY`、`AI_PROVIDER_BASE_URL`、`AI_PROVIDER_MODEL`，缺少任一值 `cmd/api` 必須直接啟動失敗，比照 `CLINIC_TIMEZONE`／`DATABASE_URL` 的 fail-closed 慣例，不得使用隱性預設值。呼叫逾時或回傳內容無法解析為預期 JSON schema 時，視為擷取失敗：conversation service 必須 fallback 成一句固定的澄清回覆，不得把例外往上拋成 `500`，也不得套用任何候選值到 session。
 

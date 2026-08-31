@@ -38,11 +38,43 @@ type SelectedSlot struct {
 // SessionPatch carries only the fields present in a PATCH request; nil
 // means "leave unchanged".
 type SessionPatch struct {
-	ServiceCode     *string
-	SelectedSlot    *SelectedSlot
-	PatientName     *string
-	PatientEmail    *string
+	ServiceCode  *string
+	SelectedSlot *SelectedSlot
+	PatientName  *string
+	PatientEmail *string
+	// OfferedSlots, when non-nil, replaces the session's stored "most
+	// recent turn's candidate slots" snapshot used by
+	// internal/service/conversation to resolve a later ordinal/time-of-day
+	// reference. A non-nil pointer to an empty slice clears it. Nil means
+	// "leave unchanged" — see UpdateSession for the cases where it's also
+	// cleared automatically.
+	OfferedSlots    *[]SelectedSlot
 	RequestedStatus *string
+}
+
+// EncodeOfferedSlots/DecodeOfferedSlots own the JSON shape stored in
+// model.BookingSession.OfferedSlots, so callers (internal/service/conversation)
+// never need to know the wire representation.
+func EncodeOfferedSlots(slots []SelectedSlot) ([]byte, error) {
+	if len(slots) == 0 {
+		return nil, nil
+	}
+	data, err := json.Marshal(slots)
+	if err != nil {
+		return nil, fmt.Errorf("encode offered slots: %w", err)
+	}
+	return data, nil
+}
+
+func DecodeOfferedSlots(raw []byte) ([]SelectedSlot, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var slots []SelectedSlot
+	if err := json.Unmarshal(raw, &slots); err != nil {
+		return nil, fmt.Errorf("decode offered slots: %w", err)
+	}
+	return slots, nil
 }
 
 // TxRepository is the set of operations available within a single
@@ -179,10 +211,12 @@ func (s *Service) UpdateSession(ctx context.Context, id string, ifMatchVersion i
 			return nil, ErrValidationFailed
 		}
 		updated.ServiceID = &svc.ID
-		// Changing the service invalidates any previously selected slot.
+		// Changing the service invalidates any previously selected slot
+		// and any stored candidate-slot snapshot from a prior turn.
 		if patch.SelectedSlot == nil {
 			updated.ProfessionalID, updated.SlotStartAt, updated.SlotEndAt, updated.SlotTimeZone = nil, nil, nil, nil
 		}
+		updated.OfferedSlots = nil
 	}
 
 	if patch.SelectedSlot != nil {
@@ -197,6 +231,11 @@ func (s *Service) UpdateSession(ctx context.Context, id string, ifMatchVersion i
 		updated.SlotStartAt = &start
 		updated.SlotEndAt = &end
 		updated.SlotTimeZone = &timeZone
+		// Selecting a slot (via PATCH button-click or the conversational
+		// ordinal/time-of-day path) consumes any stored candidate-slot
+		// snapshot; a caller can still override this by also setting
+		// patch.OfferedSlots explicitly (applied below, after this).
+		updated.OfferedSlots = nil
 	}
 
 	if patch.PatientName != nil {
@@ -213,6 +252,14 @@ func (s *Service) UpdateSession(ctx context.Context, id string, ifMatchVersion i
 			return nil, ErrValidationFailed
 		}
 		updated.PatientEmail = &email
+	}
+
+	if patch.OfferedSlots != nil {
+		encoded, err := EncodeOfferedSlots(*patch.OfferedSlots)
+		if err != nil {
+			return nil, err
+		}
+		updated.OfferedSlots = encoded
 	}
 
 	targetStatus := session.Status

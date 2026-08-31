@@ -20,10 +20,15 @@ type BookingSession struct {
 	SlotTimeZone   *string    `gorm:"column:slot_time_zone;size:64"`
 	PatientName    *string    `gorm:"column:patient_name;size:100"`
 	PatientEmail   *string    `gorm:"column:patient_email;size:254"`
-	Version        int64      `gorm:"column:version;not null"`
-	ExpiresAt      time.Time  `gorm:"column:expires_at;not null"`
-	CreatedAt      time.Time  `gorm:"column:created_at;not null"`
-	UpdatedAt      time.Time  `gorm:"column:updated_at;not null"`
+	// OfferedSlots is the JSON-encoded candidate slot list from the most
+	// recent turn that offered any, used only to resolve a later ordinal or
+	// time-of-day reference ("the first one") — see backend/README.md's
+	// /messages contract. It is never exposed in any API response.
+	OfferedSlots []byte    `gorm:"column:offered_slots;type:jsonb"`
+	Version      int64     `gorm:"column:version;not null"`
+	ExpiresAt    time.Time `gorm:"column:expires_at;not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt    time.Time `gorm:"column:updated_at;not null"`
 }
 
 func (BookingSession) TableName() string { return "booking_sessions" }

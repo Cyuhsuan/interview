@@ -64,6 +64,7 @@ func (r *Repository) UpdateSessionWithVersion(ctx context.Context, session model
 			"slot_time_zone":  session.SlotTimeZone,
 			"patient_name":    session.PatientName,
 			"patient_email":   session.PatientEmail,
+			"offered_slots":   session.OfferedSlots,
 			"version":         expectedVersion + 1,
 			"updated_at":      session.UpdatedAt,
 		})

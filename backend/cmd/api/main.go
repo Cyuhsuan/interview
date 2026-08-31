@@ -60,8 +60,9 @@ func newConversationService(
 	catalog *catalogService.Service,
 	aiProvider conversationService.AIProvider,
 	loc *time.Location,
+	cfg config.Config,
 ) *conversationService.Service {
-	return conversationService.NewService(booking, scheduling, catalog, aiProvider, loc)
+	return conversationService.NewService(booking, scheduling, catalog, aiProvider, loc, cfg.ClinicTimezone)
 }
 
 func newConversationHandler(service *conversationService.Service, catalog *catalogService.Service, cfg config.Config) *conversationHandler.Handler {

@@ -445,3 +445,109 @@ func TestConfirmAppointment_SlotNoLongerAvailable(t *testing.T) {
 		t.Fatalf("expected ErrSlotNoLongerAvailable, got %v", err)
 	}
 }
+
+func TestUpdateSession_OfferedSlotsRoundTrip(t *testing.T) {
+	repo := newFakeRepo()
+	svc, loc := newTestService(t, repo)
+	svcID := testServiceID
+	repo.sessions["s1"] = model.BookingSession{
+		ID: "s1", Status: model.BookingSessionStatusCollecting, Version: 1,
+		ServiceID: &svcID,
+		ExpiresAt: time.Date(2026, 9, 10, 0, 0, 0, 0, loc),
+	}
+
+	start, end := validSlot(loc)
+	slots := []SelectedSlot{{ProfessionalID: testProfessionalID, Start: start, End: end, TimeZone: "UTC"}}
+
+	updated, err := svc.UpdateSession(context.Background(), "s1", 1, SessionPatch{OfferedSlots: &slots})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	decoded, err := DecodeOfferedSlots(updated.OfferedSlots)
+	if err != nil {
+		t.Fatalf("decode offered slots: %v", err)
+	}
+	if len(decoded) != 1 || decoded[0].ProfessionalID != testProfessionalID || !decoded[0].Start.Equal(start) {
+		t.Fatalf("unexpected round-tripped slots: %+v", decoded)
+	}
+}
+
+func TestUpdateSession_SelectingSlotClearsOfferedSlots(t *testing.T) {
+	repo := newFakeRepo()
+	svc, loc := newTestService(t, repo)
+	svcID := testServiceID
+	start, end := validSlot(loc)
+	stored, err := EncodeOfferedSlots([]SelectedSlot{{ProfessionalID: testProfessionalID, Start: start, End: end, TimeZone: "UTC"}})
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	repo.sessions["s1"] = model.BookingSession{
+		ID: "s1", Status: model.BookingSessionStatusCollecting, Version: 1,
+		ServiceID:    &svcID,
+		OfferedSlots: stored,
+		ExpiresAt:    time.Date(2026, 9, 10, 0, 0, 0, 0, loc),
+	}
+
+	updated, err := svc.UpdateSession(context.Background(), "s1", 1, SessionPatch{
+		SelectedSlot: &SelectedSlot{ProfessionalID: testProfessionalID, Start: start, End: end, TimeZone: "UTC"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.OfferedSlots != nil {
+		t.Fatalf("expected OfferedSlots to be cleared once a slot is selected, got %v", updated.OfferedSlots)
+	}
+}
+
+func TestUpdateSession_ChangingServiceClearsOfferedSlots(t *testing.T) {
+	repo := newFakeRepo()
+	svc, loc := newTestService(t, repo)
+	svcID := testServiceID
+	start, end := validSlot(loc)
+	stored, err := EncodeOfferedSlots([]SelectedSlot{{ProfessionalID: testProfessionalID, Start: start, End: end, TimeZone: "UTC"}})
+	if err != nil {
+		t.Fatalf("encode offered slots: %v", err)
+	}
+	repo.sessions["s1"] = model.BookingSession{
+		ID: "s1", Status: model.BookingSessionStatusCollecting, Version: 1,
+		ServiceID:    &svcID,
+		OfferedSlots: stored,
+		ExpiresAt:    time.Date(2026, 9, 10, 0, 0, 0, 0, loc),
+	}
+
+	code := "A"
+	updated, err := svc.UpdateSession(context.Background(), "s1", 1, SessionPatch{ServiceCode: &code})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.OfferedSlots != nil {
+		t.Fatalf("expected OfferedSlots to be cleared on a service change, got %v", updated.OfferedSlots)
+	}
+}
+
+func TestEncodeDecodeOfferedSlots_EmptyAndRoundTrip(t *testing.T) {
+	encoded, err := EncodeOfferedSlots(nil)
+	if err != nil || encoded != nil {
+		t.Fatalf("expected nil bytes for an empty slice, got %v, %v", encoded, err)
+	}
+	decoded, err := DecodeOfferedSlots(nil)
+	if err != nil || decoded != nil {
+		t.Fatalf("expected nil slice for nil bytes, got %v, %v", decoded, err)
+	}
+
+	start := time.Date(2026, 9, 2, 9, 30, 0, 0, time.UTC)
+	end := start.Add(60 * time.Minute)
+	original := []SelectedSlot{{ProfessionalID: "prof-1", Start: start, End: end, TimeZone: "UTC"}}
+
+	data, err := EncodeOfferedSlots(original)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	roundTripped, err := DecodeOfferedSlots(data)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(roundTripped) != 1 || !roundTripped[0].Start.Equal(start) || !roundTripped[0].End.Equal(end) {
+		t.Fatalf("round-trip mismatch: %+v", roundTripped)
+	}
+}
