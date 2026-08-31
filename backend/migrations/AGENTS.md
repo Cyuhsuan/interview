@@ -1,12 +1,12 @@
-# migrations/ 作業規範
+# migrations/ Working Conventions
 
-Schema 變更流程。跨分層不變量見 [`../AGENTS.md`](../AGENTS.md)；schema 定義見 [`../README.md`](../README.md)「Catalog Production Data Model」。
+The schema-change process. See [`../AGENTS.md`](../AGENTS.md) for cross-layer invariants; see the "Catalog Production Data Model" section of [`../README.md`](../README.md) for schema definitions.
 
-## 邊界
+## Boundaries
 
-- 使用 `golang-migrate/migrate/v4` 的 `{6 位數序號}_{description}.{up|down}.sql` 命名（例：`000001_create_catalog_tables.up.sql`）；序號遞增且不重用，`up`／`down` 必須成對存在。
-- 產生後的 migration 檔不得手動編輯；schema 再變更一律新增下一號 migration，不修改既有檔案（既有檔案已可能在其他環境執行過）。
-- 禁止 GORM `AutoMigrate`；所有 schema 變更（含 constraint、index、default）只能經由這裡的 SQL migration。
-- 不得在 `cmd/api` 啟動時自動執行 migration 或 seed；只能透過 `cmd/migrate` 明確指令觸發（見 [`../cmd/AGENTS.md`](../cmd/AGENTS.md)）。
-- 每個 migration 需考慮既有資料相容性、rollback／forward-fix 路徑、lock duration 與 rolling deployment（新舊程式碼同時跑）相容性，不得假設變更當下沒有流量。
-- Constraint（NOT NULL、CHECK、exclusion constraint、FK ON DELETE 行為）必須在 SQL 層建立，不得只靠 Go 層驗證替代。
+- Uses `golang-migrate/migrate/v4`'s `{6-digit sequence}_{description}.{up|down}.sql` naming (e.g. `000001_create_catalog_tables.up.sql`); sequence numbers increase and are never reused, and `up`/`down` files must always come in pairs.
+- Generated migration files must never be hand-edited after the fact; any further schema change always adds the next-numbered migration rather than modifying an existing file (an existing file may already have run in another environment).
+- GORM `AutoMigrate` is forbidden; every schema change (constraints, indexes, defaults included) may only happen through the SQL migrations here.
+- Migrations and seeds must never run automatically on `cmd/api` startup; they are only triggered explicitly via `cmd/migrate` (see [`../cmd/AGENTS.md`](../cmd/AGENTS.md)).
+- Every migration must consider compatibility with existing data, a rollback/forward-fix path, lock duration, and compatibility with rolling deployment (old and new code running simultaneously); never assume there is no traffic at the moment of the change.
+- Constraints (NOT NULL, CHECK, exclusion constraints, FK ON DELETE behavior) must be created at the SQL layer; they must never be enforced only by Go-level validation.

@@ -1,41 +1,41 @@
-# 前端作業規範
+# Frontend Working Conventions
 
-本文件適用於 `frontend/` 下所有檔案。
+This document applies to every file under `frontend/`.
 
-## 實作 contract
+## Implementation Contract
 
-- 使用 React 與 TypeScript。
-- 患者端文案必須使用簡明英文。
-- 文字預約流程是主要路徑，即使沒有麥克風權限或語音支援也必須完整運作。
-- 語音控制必須清楚呈現正在聆聽、已停止、不支援、權限遭拒及重試等狀態。
-- 不得把 AI provider 或行事曆 credential 放在瀏覽器中。
-- 服務資格、可預約狀態、時間長度及確認結果一律以後端回應為準。
-- 在後端回傳已確認的預約 ID 前，不得以 optimistic UI 顯示預約成功。
-- 保留 session context，但不得將非必要的患者資料長期存放於瀏覽器 storage。
+- Use React and TypeScript.
+- Patient-facing copy must be in plain English.
+- The text-based booking flow is the primary path and must work fully even without microphone permission or voice support.
+- Voice controls must clearly show listening, stopped, unsupported, permission-denied, and retry states.
+- Never place AI-provider or calendar credentials in the browser.
+- Service qualifications, availability, durations, and confirmation results are always taken from the backend response.
+- Never show a booking as successful via optimistic UI before the backend has returned a confirmed appointment ID.
+- Preserve session context, but never persist non-essential patient data in browser storage long-term.
 
-## 必須支援的使用者狀態
+## Required User States
 
-- 初始服務選擇。
-- 日期與可預約時間選擇。
-- 蒐集患者姓名與行事曆邀請 email。
-- 預覽及明確確認。
-- 成功狀態，包含日期、時間、服務、專業人員及參考 ID。
-- Loading、無可用時段、輸入無效、時段剛被預約、Calendar 傳送延遲、rate limit、離線及非預期錯誤。
-- 超出服務範圍時，提供清楚的診所或緊急服務聯絡方式。
+- Initial service selection.
+- Date and available-time selection.
+- Collecting patient name and calendar-invite email.
+- Preview and explicit confirmation.
+- Success state, including date, time, service, professional, and reference ID.
+- Loading, no available slots, invalid input, slot just booked by someone else, delayed calendar delivery, rate limit, offline, and unexpected error.
+- When a request is out of scope, provide a clear clinic or emergency-service contact path.
 
-## 最低品質標準
+## Minimum Quality Bar
 
-- 從 320 px 起支援響應式版面。
-- 支援鍵盤操作、清楚的 focus、語意化標題、有 label 的控制項、live region 通知及適當對比。
-- 尊重 reduced-motion 與使用者音訊偏好。
-- 不得只依賴顏色、動畫或語音傳達狀態。
-- 測試目前版本的 Chrome、Safari、Firefox 與 Edge；語音差異必須記錄，不得隱藏。
-- 醫療與隱私文案必須客觀。避免不實保證或宣傳式內容。
+- Responsive layout starting from 320 px.
+- Keyboard operability, visible focus, semantic headings, labeled controls, live-region announcements, and adequate contrast.
+- Respect reduced-motion and the user's audio preferences.
+- Never convey state through color, animation, or voice alone.
+- Test against the current versions of Chrome, Safari, Firefox, and Edge; document voice-feature differences rather than hiding them.
+- Medical and privacy copy must be factual. Avoid overstated claims or promotional language.
 
-## 交付前必要驗證
+## Required Checks Before Delivery
 
-- Typecheck、lint、unit test 與 production build。
-- 完整文字預約流程及重要錯誤狀態的 component test。
-- 僅鍵盤操作與螢幕閱讀器 smoke test。
-- 行動裝置 viewport review 及瀏覽器語音支援矩陣。
-- Production bundle 不得含有 secrets、患者資料、debug log 或外部 script。
+- Typecheck, lint, unit tests, and a production build.
+- Component tests for the full text-based booking flow and the important error states.
+- Keyboard-only and screen-reader smoke tests.
+- Mobile viewport review and the browser voice-support matrix.
+- The production bundle must contain no secrets, patient data, debug logs, or external scripts.

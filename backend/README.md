@@ -1,25 +1,25 @@
-# 後端架構與 Contract
+# Backend Architecture & Contract
 
-## 文件狀態
+## Document Status
 
-本文件是已核准的後端基準 contract。「必須」表示可驗證規則；未決定的產品設定集中列於「待診所確認」，不得在 production 使用隱性預設值。尚缺的實作級 contract 集中列於「後端實作前待釐清」。
+This document is the approved backend baseline contract. "Must" denotes a verifiable rule; product settings that have not yet been decided are collected under "Pending Clinic Confirmation" and must never be given an implicit default in production. Implementation-level contract gaps still to be resolved are collected under "Open Items Before Backend Implementation."
 
-## 架構決策
+## Architectural Decisions
 
-後端規劃採 modular Go monolith 與 PostgreSQL，分層採 handler / service / repository，不採 DDD bounded context 分層。PostgreSQL 是預約、人員、服務、availability、同步任務與 audit state 的唯一事實來源；Google Calendar 與 Microsoft Outlook 是只接收 PostgreSQL 資料的外部 projection，不得反向影響 availability 或預約判定。
+The backend is planned as a modular Go monolith backed by PostgreSQL, layered as handler / service / repository — not as DDD bounded contexts. PostgreSQL is the single source of truth for bookings, staff, services, availability, sync jobs, and audit state; Google Calendar and Microsoft Outlook are external projections that only receive data from PostgreSQL and must never influence availability or booking decisions in reverse.
 
-### 技術棧
+### Tech Stack
 
-| 用途 | 套件 | 使用範圍 |
+| Purpose | Package | Scope of Use |
 |---|---|---|
-| HTTP router/middleware | [`gin-gonic/gin`](https://github.com/gin-gonic/gin) | 只用於 `internal/handler` 與 `internal/platform` 的 HTTP server 組裝；`service`、`repository` 不得 import Gin。 |
-| PostgreSQL ORM | [`gorm.io/gorm`](https://gorm.io/) | 唯一的 `*gorm.DB` connection pool 由 `internal/platform/database` 建立並透過 Fx 以單例注入；查詢邏輯只能寫在 `internal/repository`，`service` 與 `handler` 不得 import GORM 或操作 `*gorm.DB`。禁止使用 `AutoMigrate`，schema 變更一律走既有 migration 流程。 |
-| Dependency injection | [`go.uber.org/fx`](https://github.com/uber-go/fx) | 只用於 `cmd/api`、`cmd/calendar-worker` 的 composition root，負責組裝 handler/service/repository 與 platform 依賴；business package 不得 import Fx。 |
-| 環境變數載入 | [`joho/godotenv`](https://github.com/joho/godotenv) | 只在本機/開發環境載入 `.env`；production 必須以真正的環境變數提供設定，缺少必要變數時 API 不得啟動，不得以 `.env` 作為 production 設定來源。 |
+| HTTP router/middleware | [`gin-gonic/gin`](https://github.com/gin-gonic/gin) | Used only for HTTP server assembly in `internal/handler` and `internal/platform`; `service` and `repository` must not import Gin. |
+| PostgreSQL ORM | [`gorm.io/gorm`](https://gorm.io/) | The single `*gorm.DB` connection pool is created by `internal/platform/database` and injected as a singleton via Fx; query logic may only live in `internal/repository` — `service` and `handler` must not import GORM or touch a `*gorm.DB`. `AutoMigrate` is forbidden; schema changes always go through the existing migration process. |
+| Dependency injection | [`go.uber.org/fx`](https://github.com/uber-go/fx) | Used only in the `cmd/api` and `cmd/calendar-worker` composition roots to wire up handler/service/repository and platform dependencies; business packages must not import Fx. |
+| Environment variable loading | [`joho/godotenv`](https://github.com/joho/godotenv) | Only loads `.env` locally/in development; production must supply configuration via real environment variables, and the API must fail to start if a required variable is missing — `.env` must never be a production configuration source. |
 
-AI 只能擷取 intent 與欄位候選值。服務資格、時長、狀態轉換、availability 與最終預約判定必須由確定性 service 層程式碼完成。
+The AI may only extract intent and candidate field values. Service qualification, duration, state transitions, availability, and final booking decisions must all be handled by deterministic service-layer code.
 
-### 目錄規劃
+### Directory Layout
 
 ```text
 backend/
@@ -54,65 +54,65 @@ backend/
 └── README.md
 ```
 
-`handler` 只負責 HTTP request/response 轉換、驗證輸入格式與呼叫 `service`，不得直接操作 SQL 或呼叫外部 SDK。`service` 持有商業邏輯與其所需外部依賴的 interface（如 repository、calendar adapter），不得 import HTTP 或 SQL driver。`repository` 只實作 `service` 定義的 interface 並操作 PostgreSQL，不得包含商業規則。功能模組間以 exported service method、request/response 或 value object 溝通，不共用 repository 或 ORM model；`shared` 只放置跨兩個以上模組且語意一致的型別。
+`handler` is only responsible for HTTP request/response translation, input-format validation, and calling `service`; it must not touch SQL directly or call external SDKs. `service` holds the business logic and the interfaces for whatever external dependencies it needs (e.g. repository, calendar adapter), and must not import HTTP or SQL drivers. `repository` only implements the interfaces `service` defines and operates on PostgreSQL; it must not contain business rules. Feature modules communicate with each other only through exported service methods, requests/responses, or value objects — they never share a repository or ORM model; `shared` holds only types that are semantically identical across two or more modules.
 
-| 模組 | 責任 | 不負責 |
+| Module | Responsibility | Not Responsible For |
 |---|---|---|
-| Catalog | 服務、人員與明確服務資格 | Availability 與 Calendar 呼叫 |
-| Scheduling | 營業規則、內部時段、PostgreSQL appointment 與 availability | 建立 appointment 或讀取外部 Calendar |
-| Booking | Session、最終確認、防重疊與 outbox transaction | 直接呼叫 Calendar SDK |
-| Conversation | 英文對話、範圍邊界與 AI 候選值 | 核准預約 |
-| Calendar | Outbox delivery、retry 與 reconciliation | 改變 appointment 狀態 |
+| Catalog | Services, staff, and explicit service qualifications | Availability and Calendar calls |
+| Scheduling | Business rules, internal blocked slots, PostgreSQL appointments and availability | Creating appointments or reading external calendars |
+| Booking | Session, final confirmation, overlap prevention, and the outbox transaction | Calling the Calendar SDK directly |
+| Conversation | English conversation, scope boundaries, and AI candidate values | Approving bookings |
+| Calendar | Outbox delivery, retry, and reconciliation | Changing appointment status |
 
-Availability 是 Scheduling service 的職責；Calendar event 是 Appointment 的外部 projection。
+Availability is the Scheduling service's responsibility; a Calendar event is an Appointment's external projection.
 
 ## Canonical Types
 
 ### ID
 
-- Aggregate/entity ID 與指向 entity 的 foreign key 一律使用 UUID v4。純 join table 可使用由 UUID foreign keys 組成的 composite primary key；`seed_history` 與 idempotency 等技術 table 使用本文明確定義的 natural key。
-- UUID 由 application 透過可注入、使用 CSPRNG 的 `IDGenerator` 產生；禁止 sequential integer、語意 slug 與 nil UUID。
-- PostgreSQL 使用 `uuid`；API 使用 RFC 9562 lowercase hyphenated string。ID 建立後不得變更、重用或轉移。
-- 不另建 `public_id`。`code` 是 immutable business key，不可代替 ID，且必須符合 `^[A-Z][A-Z0-9_]{0,31}$`。
+- Aggregate/entity IDs and foreign keys pointing at an entity always use UUID v4. Pure join tables may use a composite primary key made of UUID foreign keys; technical tables such as `seed_history` and idempotency records use the natural key explicitly defined in this document.
+- UUIDs are generated by the application through an injectable, CSPRNG-backed `IDGenerator`; sequential integers, semantic slugs, and nil UUIDs are forbidden.
+- PostgreSQL uses `uuid`; the API uses an RFC 9562 lowercase hyphenated string. Once created, an ID must never change, be reused, or be transferred.
+- No separate `public_id` is created. `code` is an immutable business key, must never substitute for ID, and must match `^[A-Z][A-Z0-9_]{0,31}$`.
 
-### 時間與區間
+### Time and Intervals
 
-- Production 必須設定有效 IANA clinic timezone；缺少或無效時 API 不得啟動。
-- Instant 儲存為 PostgreSQL `timestamptz`，database connection timezone 固定 UTC，精度上限為 microseconds。
-- API instant 使用 RFC 3339。Availability/appointment 時間必須含當時診所 UTC offset，並同時回傳 IANA `timeZone`。
-- API `date` 使用 `YYYY-MM-DD` 並以 clinic timezone 解讀。時段一律使用 `[start, end)` 半開區間。
-- `created_at` 與 `updated_at` 由 PostgreSQL 產生；`updated_at` 只在資料實際變更時更新。
+- Production must configure a valid IANA clinic timezone; the API must not start without it, or with an invalid one.
+- Instants are stored as PostgreSQL `timestamptz`, the database connection timezone is fixed to UTC, and precision is capped at microseconds.
+- API instants use RFC 3339. Availability/appointment times must include the clinic's UTC offset at that time, and must also return the IANA `timeZone`.
+- API `date` uses `YYYY-MM-DD`, interpreted in the clinic timezone. Intervals always use the half-open form `[start, end)`.
+- `created_at` and `updated_at` are generated by PostgreSQL; `updated_at` only updates when data actually changes.
 
-### Version 與 Idempotency
+### Version and Idempotency
 
-- Aggregate `version` 使用 positive `bigint`，初始值 `1`，每次持久化的 domain state 變更原子遞增 `1`。
-- API 以強 ETag 傳遞 version，格式為 `ETag: "3"`。修改 session 與建立 appointment 必須提供 `If-Match`；缺少時回傳 `428 PRECONDITION_REQUIRED`，不符時回傳 `412 SESSION_VERSION_MISMATCH`。Body 不重複傳送 version。
-- `POST /appointments` 必須提供 `Idempotency-Key`：16–128 個 ASCII 字元，只允許英數字、`.`、`_`、`:` 與 `-`。
-- Idempotency scope 為 method + route + JWT `sub`，retention 為 24 小時。同 key 與同 canonical request hash 回傳原 status/body；同 key 但不同 hash 回傳 `409 IDEMPOTENCY_KEY_REUSED`。併發同 key 只能有一筆 appointment。
+- Aggregate `version` uses a positive `bigint`, starting at `1`, incremented atomically by `1` on every persisted domain-state change.
+- The API carries version via a strong ETag, formatted as `ETag: "3"`. Modifying a session and creating an appointment both require `If-Match`; if it is missing, return `428 PRECONDITION_REQUIRED`, and if it doesn't match, return `412 SESSION_VERSION_MISMATCH`. The body never repeats the version.
+- `POST /appointments` must supply an `Idempotency-Key`: 16–128 ASCII characters, restricted to alphanumerics, `.`, `_`, `:`, and `-`.
+- The idempotency scope is method + route + JWT `sub`, with a 24-hour retention. The same key with the same canonical request hash replays the original status/body; the same key with a different hash returns `409 IDEMPOTENCY_KEY_REUSED`. Concurrent requests with the same key may only ever produce one appointment.
 
-## PostgreSQL-first 預約一致性
+## PostgreSQL-first Booking Consistency
 
-API request transaction 只寫 PostgreSQL；外部 Calendar 寫入必須在 commit 後執行。
+The API request transaction only writes to PostgreSQL; external calendar writes must happen after commit.
 
-1. 驗證 session、`If-Match`、`Idempotency-Key` 與患者輸入。
-2. 只從 PostgreSQL 讀取營業規則、內部保留時段與既有 appointment；不得查詢 Google 或 Microsoft busy intervals。
-3. 在單一 PostgreSQL transaction 重新驗證 availability 與 domain rules，建立 appointment、idempotency record、audit record，以及 Google、Microsoft 各一筆 outbox record。
-4. Commit 成功後 appointment 立即為已確認的內部事實，API 回傳 `201 Created` 與 `calendarDelivery=queued`。
-5. Worker 在 PostgreSQL transaction 鎖定 outbox row、標記為 `processing` 並 commit，再以 appointment ID 與 provider 派生的穩定 idempotency key 寫入外部 Calendar，最後回寫 delivery result 與 event reference。
-6. 外部寫入失敗不得 rollback 或刪除 appointment；必須 retry，窮盡後進入 `dead_letter` 並告警人工處理。
+1. Validate the session, `If-Match`, `Idempotency-Key`, and patient input.
+2. Read business rules, internal blocked slots, and existing appointments only from PostgreSQL; never query Google or Microsoft busy intervals.
+3. Re-validate availability and domain rules inside a single PostgreSQL transaction, creating the appointment, the idempotency record, the audit record, and one outbox record each for Google and Microsoft.
+4. Once the commit succeeds, the appointment is immediately a confirmed internal fact; the API returns `201 Created` with `calendarDelivery=queued`.
+5. The worker locks the outbox row inside a PostgreSQL transaction, marks it `processing`, and commits; it then writes to the external calendar using a stable idempotency key derived from the appointment ID and provider, and finally writes back the delivery result and event reference.
+6. A failed external write must never roll back or delete the appointment; it must be retried, and once retries are exhausted it moves to `dead_letter` and alerts a human for manual handling.
 
-### 防止重疊與狀態
+### Preventing Overlap and State
 
-- Appointment 必須儲存 `professional_id`、`start_at`、`end_at` 與 status，且 `start_at < end_at`。
-- PostgreSQL 必須使用 exclusion constraint，禁止同一 `professional_id` 的 `confirmed` appointment 重疊 `tstzrange(start_at, end_at, '[)')`。Constraint conflict 映射為 `409 SLOT_NO_LONGER_AVAILABLE`。
-- BookingSession：`collecting`、`readyToConfirm`、`confirmed`、`expired`。只允許 `collecting → readyToConfirm`、`readyToConfirm → collecting|confirmed` 與任一未終止狀態 `→ expired`；`confirmed` 與 `expired` 是 terminal state。
-- Appointment：第一版只有 `confirmed`，不定義 cancellation transition。
-- Provider outbox：`pending`、`processing`、`retryable`、`delivered`、`dead_letter`。
-- API `calendarDelivery`：`queued`、`partial`、`delivered`、`attentionRequired`。兩方都成功才是 `delivered`；一方成功為 `partial`；任一方 `dead_letter` 為 `attentionRequired`。
+- An appointment must store `professional_id`, `start_at`, `end_at`, and status, with `start_at < end_at`.
+- PostgreSQL must use an exclusion constraint forbidding overlapping `confirmed` appointments for the same `professional_id` over `tstzrange(start_at, end_at, '[)')`. A constraint conflict maps to `409 SLOT_NO_LONGER_AVAILABLE`.
+- BookingSession: `collecting`, `readyToConfirm`, `confirmed`, `expired`. Only `collecting → readyToConfirm`, `readyToConfirm → collecting|confirmed`, and any non-terminal state `→ expired` are allowed; `confirmed` and `expired` are terminal states.
+- Appointment: version 1 only has `confirmed`; no cancellation transition is defined.
+- Provider outbox: `pending`, `processing`, `retryable`, `delivered`, `dead_letter`.
+- API `calendarDelivery`: `queued`, `partial`, `delivered`, `attentionRequired`. `delivered` only when both providers succeed; `partial` when one succeeds; `attentionRequired` when either reaches `dead_letter`.
 
 ## Catalog Production Data Model
 
-欄位除非標示 nullable，否則必須 `NOT NULL`。Constraint 必須在 PostgreSQL 建立，不可只依賴 Go validation。
+Unless marked nullable, every column must be `NOT NULL`. Constraints must be created in PostgreSQL, not relied upon only through Go-level validation.
 
 ### `services`
 
@@ -120,7 +120,7 @@ API request transaction 只寫 PostgreSQL；外部 Calendar 寫入必須在 comm
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `code` | `varchar(32)` | Unique immutable business key |
-| `display_name` | `varchar(100)` | Trim 後 1–100 Unicode code points |
+| `display_name` | `varchar(100)` | 1–100 Unicode code points after trim |
 | `duration_minutes` | `smallint` | `> 0` |
 | `is_active` | `boolean` | Default `true` |
 | `created_at`, `updated_at` | `timestamptz` | Default database current time |
@@ -129,13 +129,13 @@ API request transaction 只寫 PostgreSQL；外部 Calendar 寫入必須在 comm
 
 | Column | Type | Constraint |
 |---|---|---|
-| `id` | `uuid` | Primary key；API 使用此 ID |
+| `id` | `uuid` | Primary key; used as the API ID |
 | `code` | `varchar(32)` | Unique immutable business key |
-| `display_name` | `varchar(100)` | Trim 後 1–100 Unicode code points；核准的英文名稱 |
-| `is_active` | `boolean` | Default `true`；`false` 時不產生新 availability |
+| `display_name` | `varchar(100)` | 1–100 Unicode code points after trim; approved English name |
+| `is_active` | `boolean` | Default `true`; when `false`, no new availability is generated |
 | `created_at`, `updated_at` | `timestamptz` | Default database current time |
 
-`Professional` 不儲存 `level`。服務資格只來自明確關聯，不得從 code 或 display name 推導。Professional 不得 hard delete；停用不得改變既有 appointment。
+`Professional` does not store `level`. Service qualification always comes from an explicit association, never derived from a code or display name. A professional must never be hard-deleted; deactivation must not change existing appointments.
 
 ### `professional_service_qualifications`
 
@@ -145,7 +145,7 @@ API request transaction 只寫 PostgreSQL；外部 Calendar 寫入必須在 comm
 | `service_id` | `uuid` | FK → `services.id ON DELETE RESTRICT` |
 | `created_at` | `timestamptz` | Default database current time |
 
-Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 service-code array。移除資格前必須確認沒有相關未來 appointment。
+Primary key is (`professional_id`, `service_id`). No duration or service-code array is stored. Before removing a qualification, confirm there are no related future appointments.
 
 ### `professional_calendars`
 
@@ -155,38 +155,38 @@ Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 servi
 | `professional_id` | `uuid` | FK → `professionals.id ON DELETE RESTRICT` |
 | `provider` | `varchar(16)` | Check: `google` or `microsoft` |
 | `calendar_ref_ciphertext` | `bytea` | Application-layer encrypted reference |
-| `encryption_key_id` | `varchar(128)` | Managed-key identifier；不是 key material |
+| `encryption_key_id` | `varchar(128)` | Managed-key identifier; not key material |
 | `is_active` | `boolean` | Default `true` |
 | `verified_at` | `timestamptz` | Nullable |
 | `created_at`, `updated_at` | `timestamptz` | Default database current time |
 
-(`professional_id`, `provider`) 必須 unique。開始接受預約前，每位啟用的 professional 必須同時具有一筆啟用且已驗證的 Google mapping，以及一筆啟用且已驗證的 Microsoft mapping。OAuth token、client secret 與 private key 不得存於 table、seed 或 repository，必須由受管理 secret system 持有。Mapping 或 provider 暫時不可用不影響 PostgreSQL 預約判定；同步由 outbox retry 與 reconciliation 處理。
+(`professional_id`, `provider`) must be unique. Before a professional can start accepting bookings, every active professional must have exactly one active, verified Google mapping and one active, verified Microsoft mapping. OAuth tokens, client secrets, and private keys must never be stored in a table, seed, or repository — they must live in a managed secret system. A mapping being temporarily unavailable, or the provider itself being down, does not affect PostgreSQL booking decisions; sync is handled by outbox retry and reconciliation.
 
 ### `seed_history`
 
 | Column | Type | Constraint |
 |---|---|---|
-| `version` | `varchar(32)` | Primary key（natural key，非 UUID） |
-| `checksum` | `varchar(64)` | SHA-256 hex digest，NOT NULL |
+| `version` | `varchar(32)` | Primary key (natural key, not a UUID) |
+| `checksum` | `varchar(64)` | SHA-256 hex digest, NOT NULL |
 | `executed_at` | `timestamptz` | Default database current time |
-| `executor_id` | `varchar(128)` | NOT NULL，記錄執行者身分 |
+| `executor_id` | `varchar(128)` | NOT NULL, records who executed it |
 
-`checksum` 使用 `varchar` 而非 `char`：`char(n)` 會將值以空白填滿至固定長度，讀回時比對會因尾端空白而失準。無 FK 關聯——`seed_history` 是純技術/稽核表。
+`checksum` uses `varchar` rather than `char`: `char(n)` pads the value with spaces to a fixed length, which throws off comparisons against the value read back due to trailing whitespace. No FK relationships — `seed_history` is a purely technical/audit table.
 
 ## Scheduling & Booking Production Data Model
 
-欄位除非標示 nullable，否則必須 `NOT NULL`。Constraint 必須在 PostgreSQL 建立，不可只依賴 Go validation。診所營業時間、假日與內部保留時段屬於「可預約時間」的判斷輸入，依根目錄 AGENTS.md 非協商規則必須存於 PostgreSQL，不得以環境變數或程式碼常數表示；slot interval 與最短提前預約時間屬於運算參數，走 `internal/platform/config` 的必填環境變數（無預設值，缺少時 API 不得啟動），與 `CLINIC_TIMEZONE` 相同模式。
+Unless marked nullable, every column must be `NOT NULL`. Constraints must be created in PostgreSQL, not relied upon only through Go-level validation. Clinic business hours, holidays, and internal blocked slots are inputs to the "available time" decision, and per the root AGENTS.md's non-negotiable rules must live in PostgreSQL — never as environment variables or code constants; slot interval and minimum advance-booking time are computational parameters, and follow the same pattern as `CLINIC_TIMEZONE` in `internal/platform/config`: required environment variables with no default, and the API must fail to start if they're missing.
 
 ### `clinic_hours`
 
 | Column | Type | Constraint |
 |---|---|---|
-| `day_of_week` | `smallint` | Primary key，`0`（Sunday）–`6`（Saturday） |
+| `day_of_week` | `smallint` | Primary key, `0` (Sunday) – `6` (Saturday) |
 | `is_open` | `boolean` | NOT NULL |
-| `open_time` | `time` | Nullable；`is_open = false` 時必須為 `NULL` |
-| `close_time` | `time` | Nullable；`is_open = false` 時必須為 `NULL`，`is_open = true` 時必須 `> open_time` |
+| `open_time` | `time` | Nullable; must be `NULL` when `is_open = false` |
+| `close_time` | `time` | Nullable; must be `NULL` when `is_open = false`, and must be `> open_time` when `is_open = true` |
 
-固定 7 筆（每個 weekday 一筆）。資料表可為空——診所尚未確認實際時數前，空表代表「無法判斷可預約時間」，Availability 依 fail-closed 規則回傳空結果，不得臆測預設營業時間。
+Fixed at 7 rows (one per weekday). The table may be empty — until the clinic confirms actual hours, an empty table means "availability cannot be determined," and per the fail-closed rule, availability returns an empty result rather than assuming a default schedule.
 
 ### `clinic_closures`
 
@@ -195,7 +195,7 @@ Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 servi
 | `closure_date` | `date` | Primary key |
 | `reason` | `varchar(200)` | Nullable |
 
-單日全休（例如國定假日）。跨日休診以多筆 row 表示，不支援區間欄位。
+Represents a full-day closure (e.g. a public holiday). Multi-day closures are represented as multiple rows; there is no range column.
 
 ### `professional_blocked_slots`
 
@@ -203,59 +203,59 @@ Primary key 為 (`professional_id`, `service_id`)。不儲存 duration 或 servi
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `professional_id` | `uuid` | FK → `professionals.id ON DELETE RESTRICT` |
-| `start_at`, `end_at` | `timestamptz` | NOT NULL，`start_at < end_at` |
+| `start_at`, `end_at` | `timestamptz` | NOT NULL, `start_at < end_at` |
 | `reason` | `varchar(200)` | Nullable |
 | `created_at` | `timestamptz` | Default database current time |
 
-代表「內部保留時段」（例如個人休假、行政時段）。第一版沒有對應 API，由維運人員直接寫入 PostgreSQL；Availability 計算時必須排除與此表重疊的候選時段。
+Represents an "internal blocked slot" (e.g. personal time off, administrative time). There is no corresponding API in version 1 — operations staff write directly to PostgreSQL. Availability calculations must exclude any candidate slot that overlaps a row in this table.
 
 ### `booking_sessions`
 
 | Column | Type | Constraint |
 |---|---|---|
 | `id` | `uuid` | Primary key |
-| `status` | `varchar(16)` | Check：`collecting`、`readyToConfirm`、`confirmed`、`expired` |
-| `service_id` | `uuid` | Nullable，FK → `services.id ON DELETE RESTRICT` |
-| `professional_id` | `uuid` | Nullable，FK → `professionals.id ON DELETE RESTRICT` |
-| `slot_start_at`, `slot_end_at` | `timestamptz` | Nullable，成對出現，`slot_start_at < slot_end_at` |
-| `slot_time_zone` | `varchar(64)` | Nullable，IANA 名稱 |
-| `patient_name` | `varchar(100)` | Nullable，trim 後 1–100 Unicode code points |
-| `patient_email` | `varchar(254)` | Nullable，最長 254 ASCII characters |
-| `version` | `bigint` | NOT NULL，預設 `1`，依 Canonical Types「Version 與 Idempotency」原子遞增 |
+| `status` | `varchar(16)` | Check: `collecting`, `readyToConfirm`, `confirmed`, `expired` |
+| `service_id` | `uuid` | Nullable, FK → `services.id ON DELETE RESTRICT` |
+| `professional_id` | `uuid` | Nullable, FK → `professionals.id ON DELETE RESTRICT` |
+| `slot_start_at`, `slot_end_at` | `timestamptz` | Nullable, appear as a pair, `slot_start_at < slot_end_at` |
+| `slot_time_zone` | `varchar(64)` | Nullable, IANA name |
+| `patient_name` | `varchar(100)` | Nullable, 1–100 Unicode code points after trim |
+| `patient_email` | `varchar(254)` | Nullable, max 254 ASCII characters |
+| `version` | `bigint` | NOT NULL, defaults to `1`, incremented atomically per "Version and Idempotency" under Canonical Types |
 | `expires_at` | `timestamptz` | NOT NULL |
 | `created_at`, `updated_at` | `timestamptz` | Default database current time |
 
-狀態轉換依「防止重疊與狀態」既有規則：只允許 `collecting → readyToConfirm`、`readyToConfirm → collecting|confirmed`，以及任一未終止狀態 `→ expired`；`confirmed` 與 `expired` 為 terminal state。`expires_at` 於建立時以 `BOOKING_SESSION_TTL_MINUTES` 設定計算；任何讀取/更新操作前都必須先檢查 `expires_at < now()`，逾期一律視為 `expired`（`410 BOOKING_SESSION_EXPIRED`），不因為尚未有背景 job 把 `status` 欄位改掉而放行。
+State transitions follow the existing rules under "Preventing Overlap and State": only `collecting → readyToConfirm`, `readyToConfirm → collecting|confirmed`, and any non-terminal state `→ expired` are allowed; `confirmed` and `expired` are terminal states. `expires_at` is computed at creation time from the `BOOKING_SESSION_TTL_MINUTES` setting; every read/update operation must check `expires_at < now()` first, and any expired session is always treated as `expired` (`410 BOOKING_SESSION_EXPIRED`) — this must not depend on a background job having already flipped the `status` column.
 
 ### `appointments`
 
 | Column | Type | Constraint |
 |---|---|---|
 | `id` | `uuid` | Primary key |
-| `booking_session_id` | `uuid` | Unique，FK → `booking_sessions.id ON DELETE RESTRICT` |
+| `booking_session_id` | `uuid` | Unique, FK → `booking_sessions.id ON DELETE RESTRICT` |
 | `service_id` | `uuid` | FK → `services.id ON DELETE RESTRICT` |
 | `professional_id` | `uuid` | FK → `professionals.id ON DELETE RESTRICT` |
 | `patient_name` | `varchar(100)` | NOT NULL |
 | `patient_email` | `varchar(254)` | NOT NULL |
-| `start_at`, `end_at` | `timestamptz` | NOT NULL，`start_at < end_at` |
-| `time_zone` | `varchar(64)` | NOT NULL，IANA 名稱 |
-| `status` | `varchar(16)` | Check：第一版僅 `confirmed`（無 cancellation transition） |
+| `start_at`, `end_at` | `timestamptz` | NOT NULL, `start_at < end_at` |
+| `time_zone` | `varchar(64)` | NOT NULL, IANA name |
+| `status` | `varchar(16)` | Check: version 1 only has `confirmed` (no cancellation transition) |
 | `created_at`, `updated_at` | `timestamptz` | Default database current time |
 
-必須建立 `EXCLUDE USING gist (professional_id WITH =, tstzrange(start_at, end_at, '[)') WITH &&) WHERE (status = 'confirmed')`（需 `CREATE EXTENSION IF NOT EXISTS btree_gist`），實作既有「防止重疊與狀態」規則；constraint conflict 映射為 `409 SLOT_NO_LONGER_AVAILABLE`。
+Must create `EXCLUDE USING gist (professional_id WITH =, tstzrange(start_at, end_at, '[)') WITH &&) WHERE (status = 'confirmed')` (requires `CREATE EXTENSION IF NOT EXISTS btree_gist`), implementing the existing "Preventing Overlap and State" rules; a constraint conflict maps to `409 SLOT_NO_LONGER_AVAILABLE`.
 
 ### `appointment_idempotency_keys`
 
 | Column | Type | Constraint |
 |---|---|---|
-| `key` | `varchar(128)` | Primary key（natural key，非 UUID），16–128 個 ASCII 字元，只允許英數字、`.`、`_`、`:`、`-` |
-| `request_hash` | `varchar(64)` | NOT NULL，canonical request 的 SHA-256 hex digest |
-| `appointment_id` | `uuid` | Nullable，FK → `appointments.id ON DELETE RESTRICT` |
+| `key` | `varchar(128)` | Primary key (natural key, not a UUID), 16–128 ASCII characters, restricted to alphanumerics, `.`, `_`, `:`, `-` |
+| `request_hash` | `varchar(64)` | NOT NULL, SHA-256 hex digest of the canonical request |
+| `appointment_id` | `uuid` | Nullable, FK → `appointments.id ON DELETE RESTRICT` |
 | `response_status` | `smallint` | NOT NULL |
 | `response_body` | `jsonb` | NOT NULL |
 | `created_at` | `timestamptz` | Default database current time |
 
-Scope 為 method + route + JWT `sub`（已於 Canonical Types 定義），此表只補 schema。同 `key` 與同 `request_hash` 時回放既有 `response_status`/`response_body`；同 `key` 不同 `request_hash` 回傳 `409 IDEMPOTENCY_KEY_REUSED`。Retention 24 小時；本階段未實作過期清除 job，屬已知限制，見「待診所確認」。
+The scope is method + route + JWT `sub` (defined under Canonical Types); this table only fills in the schema. The same `key` with the same `request_hash` replays the stored `response_status`/`response_body`; the same `key` with a different `request_hash` returns `409 IDEMPOTENCY_KEY_REUSED`. Retention is 24 hours; an expiry-cleanup job is not yet implemented in this phase — this is a known limitation, see "Pending Clinic Confirmation."
 
 ### `appointment_audit_log`
 
@@ -267,7 +267,7 @@ Scope 為 method + route + JWT `sub`（已於 Canonical Types 定義），此表
 | `actor_id` | `varchar(128)` | NOT NULL |
 | `created_at` | `timestamptz` | Default database current time |
 
-只存 entity ID、action、actor ID 與 timestamp，符合「安全與維運底線」對 log／audit 的限制；不得寫入患者姓名、email 或訊息內容。
+Stores only entity ID, action, actor ID, and timestamp, per the log/audit restrictions in "Security & Operations Baseline"; it must never store patient name, email, or message content.
 
 ### `appointment_outbox`
 
@@ -276,27 +276,27 @@ Scope 為 method + route + JWT `sub`（已於 Canonical Types 定義），此表
 | `id` | `uuid` | Primary key |
 | `appointment_id` | `uuid` | FK → `appointments.id ON DELETE RESTRICT` |
 | `provider` | `varchar(16)` | Check: `google` or `microsoft` |
-| `status` | `varchar(16)` | Check: `pending`、`processing`、`retryable`、`delivered`、`dead_letter` |
-| `idempotency_key` | `varchar(128)` | Unique；`appt:{appointmentId}:{provider}`，見「PostgreSQL-first 預約一致性」步驟 5 |
+| `status` | `varchar(16)` | Check: `pending`, `processing`, `retryable`, `delivered`, `dead_letter` |
+| `idempotency_key` | `varchar(128)` | Unique; `appt:{appointmentId}:{provider}`, see step 5 of "PostgreSQL-first Booking Consistency" |
 | `attempt_count` | `integer` | Default `0` |
 | `next_attempt_at` | `timestamptz` | Default database current time |
-| `event_reference` | `varchar(512)` | Nullable，adapter 回傳的 provider event reference |
-| `last_error` | `varchar(500)` | Nullable，經 sanitize 的失敗原因，不得含 provider response body（見「安全與維運底線」） |
-| `created_at`、`updated_at` | `timestamptz` | Default database current time |
+| `event_reference` | `varchar(512)` | Nullable, the provider event reference returned by the adapter |
+| `last_error` | `varchar(500)` | Nullable, sanitized failure reason, must never contain the provider's raw response body (see "Security & Operations Baseline") |
+| `created_at`, `updated_at` | `timestamptz` | Default database current time |
 
-(`appointment_id`, `provider`) 必須 unique——每筆 appointment 每個 provider 恰有一筆 outbox row。`internal/service/booking` 在確認 appointment 的同一 transaction 內建立 google、microsoft 各一筆 `pending` row；`internal/service/calendar`／`cmd/calendar-worker` 依「PostgreSQL-first 預約一致性」步驟 5–6 推進其餘狀態，不改變 appointment 狀態。
+(`appointment_id`, `provider`) must be unique — every appointment has exactly one outbox row per provider. `internal/service/booking` creates one `pending` row each for google and microsoft in the same transaction that confirms the appointment; `internal/service/calendar`/`cmd/calendar-worker` advance the remaining states per steps 5–6 of "PostgreSQL-first Booking Consistency," without ever changing appointment status.
 
-### Outbox／Calendar delivery（已實作：outbox 機制 + sandbox adapter；真實 Google/Microsoft OAuth 尚未串接）
+### Outbox/Calendar Delivery (Implemented: outbox mechanism + sandbox adapter; real Google/Microsoft OAuth not yet wired up)
 
-`POST /appointments` 成功後，在同一 transaction 內為 google、microsoft 各建立一筆 `appointment_outbox` pending row，並於回應中加入 `calendarDelivery=queued`（見下方 endpoint schema）。`cmd/calendar-worker` 輪詢到期 row，鎖定並標記 `processing` 後 commit，再呼叫 `internal/service/calendar.Adapter.Create`；成功寫回 `delivered` 與 `event_reference`，暫時性失敗依 `CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS`（指數退避）標記 `retryable` 並排入 `next_attempt_at`，達到 `CALENDAR_OUTBOX_MAX_ATTEMPTS` 或永久性失敗則標記 `dead_letter`。`calendarDelivery` 由 `internal/service/calendar.Service.DeliveryStatus` 即時查詢兩筆 outbox row 計算，不快取：兩者皆 `delivered` 才是 `delivered`；一方 `delivered` 為 `partial`；任一方 `dead_letter` 為 `attentionRequired`；其餘為 `queued`。外部寫入失敗不回滾或刪除已 commit 的 appointment，符合「PostgreSQL-first 預約一致性」。
+After `POST /appointments` succeeds, one `pending` `appointment_outbox` row is created each for google and microsoft in the same transaction, and the response includes `calendarDelivery=queued` (see the endpoint schema below). `cmd/calendar-worker` polls due rows, locks and marks them `processing` before committing, then calls `internal/service/calendar.Adapter.Create`; on success it writes back `delivered` and `event_reference`; on a transient failure it marks `retryable` and schedules `next_attempt_at` per `CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS` (exponential backoff); once it reaches `CALENDAR_OUTBOX_MAX_ATTEMPTS` or hits a permanent failure, it moves to `dead_letter`. `calendarDelivery` is computed live from the two outbox rows by `internal/service/calendar.Service.DeliveryStatus`, with no caching: `delivered` only when both are `delivered`; `partial` when one is `delivered`; `attentionRequired` when either is `dead_letter`; otherwise `queued`. A failed external write never rolls back or deletes an already-committed appointment, consistent with "PostgreSQL-first Booking Consistency."
 
-目前唯一的 `Adapter` 實作是 `internal/calendar.SandboxAdapter`：一個不對外發出任何網路請求的 deterministic fake，回傳 `sandbox:{provider}:{idempotencyKey}` 作為 event reference。這是為了在真實 OAuth 授權模式核准前，先把 outbox schema、worker、retry/dead_letter 狀態機與 `calendarDelivery` 映射建置並測試完成；**它不是 Google 或 Microsoft Calendar 的真實整合，不得對外宣稱為 production-ready Calendar sync**。`professional_calendars` table（見上方 schema）尚未建立——它只在接上真實 provider 憑證時才需要，目前的 sandbox worker 不查詢也不依賴它。真實整合待「Google/Microsoft 授權模式、tenant 權限與 credential storage」（見「待診所確認」第 2 項）核准後才能開始：屆時的 credential 儲存方式已初步決定為 application-layer 加密後存入 `professional_calendars.calendar_ref_ciphertext`（沿用既有欄位設計），但實際 OAuth flow、tenant 權限與該 table 的建立仍待 sandbox 驗證與診所核准。
+The only `Adapter` implementation right now is `internal/calendar.SandboxAdapter`: a deterministic fake that never makes any network request, returning `sandbox:{provider}:{idempotencyKey}` as the event reference. This exists so the outbox schema, worker, retry/dead_letter state machine, and `calendarDelivery` mapping could be built and tested before the real OAuth authorization model is approved. **It is not a real Google or Microsoft Calendar integration, and must never be described as production-ready Calendar sync.** The `professional_calendars` table (see the schema above) has not yet been created — it is only needed once real provider credentials are wired up; the current sandbox worker neither queries nor depends on it. Real integration cannot begin until "Google/Microsoft authorization model, tenant permissions, and credential storage" (see item 2 under "Pending Clinic Confirmation") is approved: the credential-storage approach has already been provisionally decided as application-layer encryption into `professional_calendars.calendar_ref_ciphertext` (reusing the existing column design), but the actual OAuth flow, tenant permissions, and creation of that table are still pending sandbox validation and clinic approval.
 
-Reconciliation 目前僅提供 `internal/service/calendar.Service.Reconcile`，回傳目前的 `dead_letter` backlog 供呼叫端記錄／告警；實際告警對象與人工處理 SLA 仍待診所確認（見「待診所確認」第 3 項），因此這裡刻意不接任何外部通知系統。
+Reconciliation currently only offers `internal/service/calendar.Service.Reconcile`, which returns the current `dead_letter` backlog for the caller to log/alert on; who actually receives alerts and the manual-handling SLA are still pending clinic confirmation (see item 3 under "Pending Clinic Confirmation"), so this deliberately does not integrate with any external notification system yet.
 
 ## Reference-data Seeder
 
-Seeder 是受權限的明確維運指令，不得在 API startup 自動執行。下表數值必須與根目錄 README「診所模型」一致，此處列出是為了提供 seed artifact 的精確 insert 值。
+The seeder is a permissioned, explicit operational command and must never run automatically at API startup. The table below must match the "Clinic Model" table in the root README exactly; it is listed here to give the seed artifact's precise insert values.
 
 | Service code | Display name | Duration |
 |---|---|---:|
@@ -308,45 +308,45 @@ Seeder 是受權限的明確維運指令，不得在 API startup 自動執行。
 
 | Professional code | Display name | Qualifications |
 |---|---|---|
-| `JUNIOR` | `Junior` | A、B |
-| `SENIOR_1` | `Senior 1` | A、B、C、D、E |
-| `SENIOR_2` | `Senior 2` | A、B、C、D、E |
+| `JUNIOR` | `Junior` | A, B |
+| `SENIOR_1` | `Senior 1` | A, B, C, D, E |
+| `SENIOR_2` | `Senior 2` | A, B, C, D, E |
 
-1. Seed artifact 具有 immutable version 與 SHA-256 checksum；成功紀錄寫入 `seed_history(version, checksum, executed_at, executor_id)`，`version` 為 primary key。相同 version/checksum 已存在時成功 no-op；相同 version 但 checksum 不同時 fail。
-2. 以 `code` 查找服務與人員。不存在時產生 UUID 並 insert；已存在時驗證上述固定 display name、duration 與其他靜態欄位，不覆寫、不重新啟用，差異時 fail。
-3. 只 insert 缺少的 12 筆 qualification；不自動刪除額外人員或資格。固定資料變更必須使用新版本 artifact。
-4. 所有驗證、insert 與 `seed_history` 寫入在單一 PostgreSQL transaction 完成；任一衝突都必須 rollback。
-5. Calendar mapping、email、demo ID 與 credential 不得出現於 seed。
+1. A seed artifact has an immutable version and a SHA-256 checksum; a successful run is recorded in `seed_history(version, checksum, executed_at, executor_id)`, with `version` as the primary key. If the same version/checksum already exists, it's a no-op success; if the same version exists with a different checksum, it fails.
+2. Services and professionals are looked up by `code`. If missing, a UUID is generated and the row is inserted; if it already exists, the fixed display name, duration, and other static fields above are verified, never overwritten or re-activated — any discrepancy fails the run.
+3. Only the missing rows among the 12 qualification pairs are inserted; extra professionals or qualifications are never auto-deleted. Changing the fixed data requires a new-version artifact.
+4. All validation, inserts, and the `seed_history` write happen in a single PostgreSQL transaction; any conflict rolls back everything.
+5. Calendar mappings, emails, demo IDs, and credentials must never appear in a seed.
 
-驗收涵蓋首次/重複執行、checksum/靜態欄位衝突、rollback、FK/unique constraint、12 筆資格組合與停用人員。
+Acceptance covers first run/re-run, checksum/static-field conflicts, rollback, FK/unique constraints, all 12 qualification combinations, and deactivated professionals.
 
 ## RESTful API Contract
 
-Base path 為 `/api/v1`，只接受 HTTPS UTF-8 JSON。Request body 上限 64 KiB；name 為 trim 後 1–100 Unicode code points，email 最長 254 ASCII characters，message 最長 2,000 Unicode code points。
+Base path is `/api/v1`, HTTPS UTF-8 JSON only. Request body is capped at 64 KiB; name is 1–100 Unicode code points after trim, email is at most 254 ASCII characters, message is at most 2,000 Unicode code points.
 
-| Method | Path | 用途 |
+| Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/services` | 取得啟用服務 |
-| `GET` | `/professionals?serviceCode=C` | 取得合格且啟用的人員 |
-| `GET` | `/availability?serviceCode=C&date=2026-09-02` | 取得匿名時段 |
-| `POST` | `/booking-sessions` | 建立短期 session |
-| `GET` | `/booking-sessions/{id}` | 取得 session |
-| `PATCH` | `/booking-sessions/{id}` | 使用 `If-Match` 更新 session |
-| `POST` | `/booking-sessions/{id}/messages` | 傳送英文患者訊息 |
-| `POST` | `/voice/transcriptions` | 上傳錄音，回傳 AI 轉錄文字 |
-| `POST` | `/appointments` | 使用 `If-Match` 與 `Idempotency-Key` 確認預約 |
+| `GET` | `/services` | Get active services |
+| `GET` | `/professionals?serviceCode=C` | Get qualified, active professionals |
+| `GET` | `/availability?serviceCode=C&date=2026-09-02` | Get anonymous time slots |
+| `POST` | `/booking-sessions` | Create a short-lived session |
+| `GET` | `/booking-sessions/{id}` | Get a session |
+| `PATCH` | `/booking-sessions/{id}` | Update a session with `If-Match` |
+| `POST` | `/booking-sessions/{id}/messages` | Send an English patient message |
+| `POST` | `/voice/transcriptions` | Upload a recording, get back AI-transcribed text |
+| `POST` | `/appointments` | Confirm a booking with `If-Match` and `Idempotency-Key` |
 
-Appointment body 只含 UUID `bookingSessionId`，不包含 version。Booking session 的 `selectedSlot` 必須含 UUID `professionalId`、RFC 3339 `start`/`end` 與 IANA `timeZone`。
+The appointment body contains only the UUID `bookingSessionId`, no version. A booking session's `selectedSlot` must contain a UUID `professionalId`, RFC 3339 `start`/`end`, and an IANA `timeZone`.
 
-患者身分不透過帳號或登入驗證：booking session 於 `collecting` 狀態蒐集患者姓名與 email，僅作為該筆預約的聯絡方式與行事曆邀請對象。任何外部 email 皆可用於預約，不要求預先註冊、網域限制或所有權驗證；email 不作為長期帳號識別，也不得用於跨 session 查詢或關聯患者歷史預約。
+Patient identity is never verified through an account or login: while a booking session is `collecting`, it gathers the patient's name and email, used only as the contact method and calendar-invite recipient for that appointment. Any external email may be used to book, with no pre-registration, domain restriction, or ownership verification required; email is never used as a long-lived account identifier, and must never be used to query across sessions or associate a patient's booking history.
 
-Public session 必須使用簽署 JWT，並透過 `Secure; HttpOnly; SameSite=Strict` cookie 傳送，不得存入 `localStorage` 或 `sessionStorage`。JWT 至少包含 `iss`、`aud`、`sub`、`jti`、`iat`、`nbf` 與 `exp`，不得包含患者姓名、email 或訊息；伺服器必須固定允許的簽章演算法並驗證所有 claims。Cookie authentication 仍須搭配 CSRF token 與 non-empty exact-origin allowlist。
+Public sessions must use a signed JWT delivered via a `Secure; HttpOnly; SameSite=Strict` cookie, never stored in `localStorage` or `sessionStorage`. The JWT must contain at least `iss`, `aud`, `sub`, `jti`, `iat`, `nbf`, and `exp`, and must never contain patient name, email, or message content; the server must pin the allowed signing algorithms and validate every claim. Cookie authentication must still be paired with a CSRF token and a non-empty exact-origin allowlist.
 
-Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限回傳 `429` 與 `Retry-After`。第一版不提供 appointment list、取消或改期 API。
+Rate-limit values come from environment configuration, and production must not start without them being set; exceeding the limit returns `429` with `Retry-After`. Version 1 does not provide an appointment list, cancellation, or rescheduling API.
 
 ### Error Contract
 
-錯誤使用 `application/problem+json`，必須含 `type`、`title`、`status`、`code`、`detail` 與 request-scoped `instance`；欄位錯誤可含 `errors[]` 的 `field` 與 `code`。`detail` 必須是安全的簡明英文，不得包含 stack trace、SQL、患者資料、token 或 provider response。
+Errors use `application/problem+json` and must include `type`, `title`, `status`, `code`, `detail`, and a request-scoped `instance`; field-level errors may include `field` and `code` inside `errors[]`. `detail` must be safe, concise English, and must never contain a stack trace, SQL, patient data, tokens, or a provider response.
 
 | HTTP | Code |
 |---:|---|
@@ -363,7 +363,7 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 
 ### Catalog Endpoint Schemas
 
-`GET /services` 回傳啟用中的服務陣列：
+`GET /services` returns an array of active services:
 
 ```json
 [
@@ -376,7 +376,7 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 ]
 ```
 
-`GET /professionals?serviceCode=C` 回傳同時啟用且具備該服務資格的人員陣列：
+`GET /professionals?serviceCode=C` returns an array of professionals who are both active and qualified for that service:
 
 ```json
 [
@@ -388,11 +388,11 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 ]
 ```
 
-`serviceCode` 為必填 query 參數，必須符合 `^[A-Z][A-Z0-9_]{0,31}$`；缺少時回傳 `400 INVALID_REQUEST`（`errors[].field="serviceCode"`、`code="REQUIRED"`），格式不符回傳同狀態碼（`code="INVALID_FORMAT"`）。`serviceCode` 格式正確但不存在啟用中的對應服務、或該服務目前無任何啟用中的合格人員，回傳 `200` 與空陣列 `[]`——此為合法查詢的合法結果，不視為錯誤。
+`serviceCode` is a required query parameter and must match `^[A-Z][A-Z0-9_]{0,31}$`; if missing, return `400 INVALID_REQUEST` (`errors[].field="serviceCode"`, `code="REQUIRED"`); if malformed, return the same status (`code="INVALID_FORMAT"`). If `serviceCode` is well-formed but no active matching service exists, or that service currently has no active qualified professionals, return `200` with an empty array `[]` — this is a valid result for a valid query, not an error.
 
-### Scheduling／Booking Endpoint Schemas
+### Scheduling/Booking Endpoint Schemas
 
-`GET /availability?serviceCode=C&date=2026-09-02` 回傳依 `serviceCode` 時長、合格人員、`clinic_hours`、`clinic_closures`、`professional_blocked_slots` 與既有 `confirmed` appointment 計算出的匿名候選時段：
+`GET /availability?serviceCode=C&date=2026-09-02` returns anonymous candidate time slots computed from the `serviceCode`'s duration, qualified professionals, `clinic_hours`, `clinic_closures`, `professional_blocked_slots`, and existing `confirmed` appointments:
 
 ```json
 [
@@ -405,11 +405,11 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 ]
 ```
 
-`serviceCode` 規則同 Catalog；`date` 為必填 `YYYY-MM-DD`，以 `CLINIC_TIMEZONE` 解讀，格式不符回傳 `400 INVALID_REQUEST`（`code="INVALID_FORMAT"`）。以下情況回傳 `200` 與空陣列 `[]`（合法空結果，非錯誤）：`serviceCode` 無合格人員、當日 `clinic_hours.is_open=false`、`clinic_hours` 尚無該 weekday 資料、當日為 `clinic_closures`、或扣除既有預約與 blocked slot 後無剩餘可預約時段。無法連線 PostgreSQL 或查詢失敗時，依 fail-closed 規則回傳 `503 AVAILABILITY_UNAVAILABLE`，不得回傳臆測結果。
+`serviceCode` follows the same rule as Catalog; `date` is a required `YYYY-MM-DD`, interpreted in `CLINIC_TIMEZONE`; a malformed value returns `400 INVALID_REQUEST` (`code="INVALID_FORMAT"`). The following cases return `200` with an empty array `[]` (a valid empty result, not an error): `serviceCode` has no qualified professionals, `clinic_hours.is_open=false` for that day, `clinic_hours` has no row yet for that weekday, the day is in `clinic_closures`, or no slots remain after excluding existing appointments and blocked slots. If PostgreSQL cannot be reached or the query fails, follow the fail-closed rule and return `503 AVAILABILITY_UNAVAILABLE` — never return a guessed result.
 
-`POST /booking-sessions` body 可為空物件 `{}`；建立 `status="collecting"` 的新 session，回傳 `201`、`ETag: "1"`、`Location: /api/v1/booking-sessions/{id}`，body 為下方 session representation。
+`POST /booking-sessions` may take an empty body `{}`; it creates a new session with `status="collecting"`, returning `201`, `ETag: "1"`, `Location: /api/v1/booking-sessions/{id}`, with the body being the session representation below.
 
-`GET /booking-sessions/{id}` 回傳目前 session：
+`GET /booking-sessions/{id}` returns the current session:
 
 ```json
 {
@@ -423,9 +423,9 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 }
 ```
 
-`ETag` header 帶目前 `version`。`id` 不存在或已過期（`expires_at < now()`）回傳 `410 BOOKING_SESSION_EXPIRED`。
+The `ETag` header carries the current `version`. If `id` doesn't exist or has expired (`expires_at < now()`), return `410 BOOKING_SESSION_EXPIRED`.
 
-`PATCH /booking-sessions/{id}`（`If-Match` 必填，缺少回傳 `428 PRECONDITION_REQUIRED`，值與目前 `version` 不符回傳 `412 SESSION_VERSION_MISMATCH`）允許局部更新：
+`PATCH /booking-sessions/{id}` (`If-Match` required; missing returns `428 PRECONDITION_REQUIRED`, and a value that doesn't match the current `version` returns `412 SESSION_VERSION_MISMATCH`) allows a partial update:
 
 ```json
 {
@@ -442,15 +442,15 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 }
 ```
 
-所有欄位皆為選填，只更新請求中出現的欄位。`status` 只接受顯式轉換目標值，非法轉換（見「防止重疊與狀態」狀態機）回傳 `422 VALIDATION_FAILED`。轉入 `readyToConfirm` 前，service 層必須確認 `serviceCode`、`selectedSlot`、`patientName`、`patientEmail` 皆已填妥，且 slot 仍在 `GET /availability` 會回傳的範圍內；否則回傳 `422 VALIDATION_FAILED` 並於 `errors[]` 標示缺漏欄位。成功回應 `200` 與更新後的 session representation，`ETag` 遞增為新 `version`。
+All fields are optional; only fields present in the request are updated. `status` only accepts an explicit transition target; an illegal transition (see the state machine under "Preventing Overlap and State") returns `422 VALIDATION_FAILED`. Before transitioning into `readyToConfirm`, the service layer must confirm that `serviceCode`, `selectedSlot`, `patientName`, and `patientEmail` are all filled in, and that the slot is still within the range `GET /availability` would return; otherwise return `422 VALIDATION_FAILED` with the missing fields marked in `errors[]`. On success, return `200` with the updated session representation, and `ETag` incremented to the new `version`.
 
-`POST /appointments`（`If-Match` 為 session 目前 `version`；`Idempotency-Key` 必填，格式見 Canonical Types）body 只含 `bookingSessionId`：
+`POST /appointments` (`If-Match` is the session's current `version`; `Idempotency-Key` is required, format per Canonical Types) has a body containing only `bookingSessionId`:
 
 ```json
 { "bookingSessionId": "3fa85f64-5717-4562-b3fc-2c963f66afa6" }
 ```
 
-成功時在單一 transaction 內重新驗證 slot 可用性、建立 `appointments` row、`appointment_idempotency_keys` row、`appointment_audit_log` row 與 google／microsoft 各一筆 `appointment_outbox` pending row，session 轉為 `confirmed`；回傳 `201`：
+On success, within a single transaction it re-validates slot availability, creates an `appointments` row, an `appointment_idempotency_keys` row, an `appointment_audit_log` row, and one `appointment_outbox` pending row each for google and microsoft; the session transitions to `confirmed`. Returns `201`:
 
 ```json
 {
@@ -466,17 +466,17 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 }
 ```
 
-`calendarDelivery` 剛確認時一律為 `queued`；同一 `Idempotency-Key`／`request_hash` 的重放請求會即時查詢兩筆 outbox row 目前狀態，可能回傳 `queued`、`partial`、`delivered` 或 `attentionRequired`（見「Outbox／Calendar delivery」章節的映射規則），不是固定值。Session 非 `readyToConfirm` 狀態時回傳 `422 VALIDATION_FAILED`；slot 已被搶走（exclusion constraint 衝突）回傳 `409 SLOT_NO_LONGER_AVAILABLE`；`Idempotency-Key` 重複且 request hash 不同回傳 `409 IDEMPOTENCY_KEY_REUSED`；重複且 hash 相同回放原本的 status/body。
+`calendarDelivery` is always `queued` right after confirmation; a replay of the same `Idempotency-Key`/`request_hash` queries the current status of both outbox rows live and may return `queued`, `partial`, `delivered`, or `attentionRequired` (see the mapping rules in "Outbox/Calendar Delivery") — it is not a fixed value. If the session isn't in `readyToConfirm`, return `422 VALIDATION_FAILED`; if the slot has been taken (exclusion-constraint conflict), return `409 SLOT_NO_LONGER_AVAILABLE`; if `Idempotency-Key` is reused with a different request hash, return `409 IDEMPOTENCY_KEY_REUSED`; if reused with the same hash, replay the original status/body.
 
-`POST /booking-sessions/{id}/messages`（不需要 `If-Match`——這個 endpoint 內部讀取 session 目前 version 並套用變更，不對外暴露樂觀鎖）傳送一則英文患者訊息：
+`POST /booking-sessions/{id}/messages` (`If-Match` is not required — this endpoint internally reads the session's current version and applies changes itself, without exposing optimistic locking externally) sends one English patient message:
 
 ```json
 { "message": "I'd like to book a cleaning next Tuesday afternoon" }
 ```
 
-`message` 為必填，trim 後 1–2,000 Unicode code points（同本節開頭的全域訊息長度限制）；缺少或空白回傳 `400 INVALID_REQUEST`（`errors[].field="message"`、`code="REQUIRED"`），超過長度上限回傳同狀態碼（`code="TOO_LONG"`）。Session 不存在或已過期回傳 `410 BOOKING_SESSION_EXPIRED`，與其他 session endpoint 一致。
+`message` is required, 1–2,000 Unicode code points after trim (same global message-length limit stated at the top of this section); missing or blank returns `400 INVALID_REQUEST` (`errors[].field="message"`, `code="REQUIRED"`), exceeding the limit returns the same status (`code="TOO_LONG"`). If the session doesn't exist or has expired, return `410 BOOKING_SESSION_EXPIRED`, consistent with the other session endpoints.
 
-成功時回傳 `200`，body 與 `GET /booking-sessions/{id}` 相同的 session representation，外加三個欄位：
+On success, returns `200` with the same session representation as `GET /booking-sessions/{id}`, plus three extra fields:
 
 ```json
 {
@@ -493,59 +493,59 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 }
 ```
 
-- `reply`：機器人回覆的英文文字。**一律由後端確定性樣板組成**——AI 只用來判斷本輪要用哪個樣板（例如「已擷取到 service，但缺 date」或「超出範圍分類為 emergency」），不得把 AI 生成的自由文字直接當作 `reply` 回傳，避免 AI 意外產出診斷、報價或其他超出範圍的內容。
-- `offeredSlots`：本輪由 Scheduling（`GET /availability` 同一套邏輯）算出的候選時段陣列，形狀同 `GET /availability` 的元素（`professionalId`/`start`/`end`/`timeZone`）；只有當 session 已知 `serviceCode` 且本輪訊息可解析出明確日期時才非空，其餘情況一律回傳 `[]`。這份候選清單同時會存入 session 的 `offered_slots`（內部欄位，不對外回傳），作為**有限的「上一輪」記憶**——不是完整多輪對話歷史，只反查緊接在前一輪提供過的候選：若本輪訊息沒有再給新的 `serviceCode`／日期，且用序數（「the first one」）或時段（「the morning one」）指代其中之一，`/messages` 會依伺服器對候選清單依 `start` 由早到晚排序（同時間依 `professionalId` 排序求穩定）後的順位解析出對應候選，並在套用前重新呼叫一次 `GetAvailability` 現查確認仍可預約（fail-closed，不信任已儲存的候選）；若確認仍可預約才寫入 `selectedSlot` 並清空 `offered_slots`，若已被搶走則不套用、重新提供最新候選並清空舊的。序數只涵蓋 1–5（對應候選上限 `maxOfferedSlots`）與「最後一個」，不解析確切時間（如「9am」）；無法判斷或超出範圍時直接忽略，回到今天既有的正常流程，不視為錯誤。**已知限制**：若患者前端當下有套用執業者篩選，畫面上視覺的「第一個」可能與伺服器認定的順位不同，此情況不隱藏、寫在此處供實作與測試參考。除了這條指代路徑，選擇某個時段一律也能透過既有 `PATCH /booking-sessions/{id}`（帶 `selectedSlot`）完成，行為不變。
-- `outOfScope`：本輪訊息是否被分類為超出範圍（診斷、處方、緊急醫療、報價、保險或取消／改期要求之一）。分類為 `true` 時，`reply` 一律是該分類對應的固定樣板（引導患者直接聯絡診所，緊急情況建議立即就醫），且本輪**不會**修改任何 session 欄位，即使訊息中同時夾帶了服務或日期資訊。
+- `reply`: the bot's reply text in English. **It is always assembled from a fixed, deterministic backend template** — AI is only used to decide which template applies this turn (e.g. "service extracted but date missing," or "classified as an out-of-scope emergency request"); the AI's freely generated text must never be returned directly as `reply`, so a model glitch can never produce a diagnosis, a price quote, or other out-of-scope content.
+- `offeredSlots`: this turn's candidate time slots, computed by Scheduling (the same logic as `GET /availability`), shaped like `GET /availability`'s elements (`professionalId`/`start`/`end`/`timeZone`); it is non-empty only when the session already knows `serviceCode` and this turn's message resolves to an explicit date — otherwise it is always `[]`. This candidate list is also stored in the session's `offered_slots` (an internal field, never returned to the client), acting as **limited "previous turn" memory** — not full multi-turn history, only a reverse lookup into the immediately preceding turn's offer: if this turn doesn't supply a new `serviceCode`/date and instead uses an ordinal ("the first one") or a time period ("the morning one") to refer to one of them, `/messages` resolves the reference against the server's own sort of the candidate list (by `start` ascending, tie-broken by `professionalId` for determinism), and re-invokes `GetAvailability` live before applying it to confirm it's still bookable (fail-closed — the stored candidate is never trusted). Only if it's confirmed still bookable is `selectedSlot` written and `offered_slots` cleared; if it's been taken, it is not applied — the latest candidates are re-offered and the stale ones cleared. Ordinals only cover 1–5 (matching the candidate cap `maxOfferedSlots`) and "the last one"; exact times (e.g. "9am") are never parsed. When the reference can't be resolved or is out of scope, it is simply ignored and the normal flow for that day continues — this is never treated as an error. **Known limitation**: if the patient's frontend currently has a professional filter applied, the visually "first" option on screen may not match the server's own ordinal — this is not hidden, and is documented here for implementation and testing reference. Aside from this reference path, selecting a slot can always also be done through the existing `PATCH /booking-sessions/{id}` (with `selectedSlot`), and that behavior is unchanged.
+- `outOfScope`: whether this turn's message was classified as out of scope (diagnosis, prescription, emergency, quote, insurance, or a cancel/reschedule request). When classified `true`, `reply` is always the fixed template for that category (directing the patient to contact the clinic directly, and to seek immediate care for an emergency), and this turn **does not** modify any session field, even if the message also happened to include service or date information.
 
-`ETag` header 一律帶 session 目前的 version（不論本輪是否真的修改了欄位）。AI 候選值若無法對應到合法的服務代碼或候選日期無法解析，**不是錯誤**——service 層直接忽略該候選值，`reply` 改為澄清問句請患者換句話說，HTTP 回應仍是 `200`。同理，若套用當下 session version 被其他請求搶先變更，service 內部重新讀取一次並重試一次即可，仍回傳 `200`（`reply` 提示請再說一次），不會把樂觀鎖衝突以 `412` 曝露給聊天使用者。真正會回傳非 `200` 的情況只有：請求格式本身不合法（`400`）、session 不存在或過期（`410`）、計算 `offeredSlots` 時 PostgreSQL 查詢失敗（依 fail-closed 規則回傳 `503 AVAILABILITY_UNAVAILABLE`，不得回傳臆測時段）、或非預期的伺服器錯誤（`500`）。
+The `ETag` header always carries the session's current version (regardless of whether this turn actually changed any field). If an AI candidate value doesn't map to a valid service code, or a candidate date can't be parsed, that is **not an error** — the service layer simply discards that candidate and `reply` becomes a clarifying question asking the patient to rephrase; the HTTP response is still `200`. Similarly, if the session's version was changed by another request just before this one applied its update, the service internally re-reads it once and retries once — still returning `200` (with `reply` asking the patient to say it again), never surfacing an optimistic-lock conflict as `412` to a chat user. The only cases that return something other than `200` are: the request itself is malformed (`400`); the session doesn't exist or has expired (`410`); the PostgreSQL query for `offeredSlots` fails (per the fail-closed rule, return `503 AVAILABILITY_UNAVAILABLE` — never a guessed slot list); or an unexpected server error (`500`).
 
 ## Calendar Adapter Contract
 
-Provider-neutral port（`internal/service/calendar.Adapter`）只負責將 PostgreSQL appointment 投影至外部系統，第一版支援 `Create`、health、retry classification（`internal/service/calendar.RetryableError` 區分暫時性與永久性失敗）與 reconciliation（`Service.Reconcile` 回報 `dead_letter` backlog）；不提供 `Busy`、`Update` 或 `Cancel`。
+The provider-neutral port (`internal/service/calendar.Adapter`) is only responsible for projecting a PostgreSQL appointment into an external system. Version 1 supports `Create`, health checks, and retry classification (`internal/service/calendar.RetryableError` distinguishes transient from permanent failures) and reconciliation (`Service.Reconcile` reports the `dead_letter` backlog); it does not provide `Busy`, `Update`, or `Cancel`.
 
-目前唯一的具體實作是 `internal/calendar.SandboxAdapter`——一個不對外發出任何請求的 deterministic fake，用於在真實 OAuth 授權模式核准前先建置並測試 outbox／worker／retry 狀態機（見「Outbox／Calendar delivery」章節）。它不是 Google 或 Microsoft 的正式整合。
+The only concrete implementation right now is `internal/calendar.SandboxAdapter` — a deterministic fake that makes no outbound requests, used to build and test the outbox/worker/retry state machine (see "Outbox/Calendar Delivery") before the real OAuth authorization model is approved. It is not a real integration with Google or Microsoft.
 
 ## AI Provider Adapter Contract
 
-Provider-neutral port（`internal/service/conversation.AIProvider`）只負責「單輪訊息 → 候選值＋範圍分類」：輸入一則患者訊息、一個 reference time 與目前已知的合法服務代碼列表，輸出候選的 `serviceCode`／日期／時段偏好（早上／下午／晚上）／患者姓名／email／`offeredSlotOrdinal`（患者對上一輪候選時段的**位置**指代，1–5 或 -1 代表最後一個，僅位置指代，不解析確切時間），以及是否屬於超出範圍分類。Port 不做多輪對話記憶、不判斷預約是否合法——這些一律由 `internal/service/conversation` 呼叫既有的 `internal/service/booking` 與 `internal/service/scheduling` 確定性邏輯完成；`offeredSlotOrdinal` 同樣只是候選值，實際是否對應到一個仍可預約的時段，由 `internal/service/conversation` 現查 `GetAvailability` 後才決定是否套用，AI 本身不判斷任何時段是否合法或仍可預約。
+The provider-neutral port (`internal/service/conversation.AIProvider`) is only responsible for "single-turn message → candidate values + scope classification": given a patient message, a reference time, and the currently known list of valid service codes, it outputs candidate `serviceCode`/date/time-of-day preference (morning/afternoon/evening)/patient name/email/`offeredSlotOrdinal` (the patient's **positional** reference to the previous turn's offered slots, 1–5 or -1 for the last one, positional only — never an exact time), plus whether the message is out of scope. The port has no multi-turn memory and does not decide booking legality — that is always handled by `internal/service/conversation` calling into the existing deterministic `internal/service/booking` and `internal/service/scheduling` logic; `offeredSlotOrdinal` is likewise just a candidate value — whether it actually maps to a still-bookable slot is decided by `internal/service/conversation` after a live `GetAvailability` check; the AI itself never judges whether any slot is valid or still available.
 
-第一版由 `internal/ai` 提供唯一的具體實作：一個 OpenAI-compatible Chat Completions HTTP client，要求模型以固定 JSON schema 回傳擷取結果。啟動時必須設定 `AI_PROVIDER_API_KEY`、`AI_PROVIDER_BASE_URL`、`AI_PROVIDER_MODEL`，缺少任一值 `cmd/api` 必須直接啟動失敗，比照 `CLINIC_TIMEZONE`／`DATABASE_URL` 的 fail-closed 慣例，不得使用隱性預設值。呼叫逾時或回傳內容無法解析為預期 JSON schema 時，視為擷取失敗：conversation service 必須 fallback 成一句固定的澄清回覆，不得把例外往上拋成 `500`，也不得套用任何候選值到 session。
+Version 1 provides a single concrete implementation via `internal/ai`: an OpenAI-compatible Chat Completions HTTP client that requires the model to return its extraction as a fixed JSON schema. `AI_PROVIDER_API_KEY`, `AI_PROVIDER_BASE_URL`, and `AI_PROVIDER_MODEL` must be set at startup; if any is missing, `cmd/api` must fail to start immediately, following the same fail-closed convention as `CLINIC_TIMEZONE`/`DATABASE_URL` — never an implicit default. If a call times out or the response can't be parsed as the expected JSON schema, that counts as an extraction failure: the conversation service must fall back to a fixed clarifying reply, must never let the exception bubble up as a `500`, and must never apply any candidate value to the session.
 
-**這是本階段的開發／測試用介接選擇，不是根目錄 README「實作前必須決定的事項」第 3 項核准的正式 production AI provider**；正式供應商選型與適用的健康資料／隱私協議仍待診所核准，核准前不得把本 adapter 的預設值當成 production 承諾對外宣稱。
+**This is the development/test integration choice for this phase, not the approved production AI provider referenced in item 3 of the root README's "Decisions Required Before Implementation."** The formal provider selection and the applicable health-data/privacy agreements are still pending clinic approval, and until approved, this adapter's defaults must never be represented externally as a production commitment.
 
 ### Voice Transcription Endpoint
 
-`POST /voice/transcriptions`（不需 session id、不需 `If-Match`——轉錄本身無狀態，patient 端須再把回傳文字送進既有 `/booking-sessions/{id}/messages` 才會影響 booking session）接受 `multipart/form-data`，欄位 `audio` 為錄音檔案：
+`POST /voice/transcriptions` (no session id or `If-Match` required — transcription itself is stateless; the client must still send the returned text into the existing `/booking-sessions/{id}/messages` for it to affect the booking session) accepts `multipart/form-data` with an `audio` field containing the recording:
 
-- Request body 上限 **10 MiB**——這是本 endpoint 專屬的例外上限，不是放寬本節開頭記載的全域 64 KiB JSON body 上限；超過回傳 `413 REQUEST_TOO_LARGE`。
-- `audio` 的 `Content-Type` 僅接受 `audio/webm`、`audio/ogg`、`audio/mp4`、`audio/wav`、`audio/mpeg` 白名單；不在白名單或缺少檔案回傳 `400 INVALID_REQUEST`。
-- 成功回傳 `200`：
+- The request body is capped at **10 MiB** — this is an exception specific to this endpoint, not a relaxation of the global 64 KiB JSON body cap stated at the top of this section; exceeding it returns `413 REQUEST_TOO_LARGE`.
+- `audio`'s `Content-Type` only accepts the whitelist `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/wav`, `audio/mpeg`; anything outside the whitelist, or a missing file, returns `400 INVALID_REQUEST`.
+- On success, returns `200`:
 
   ```json
   { "text": "I'd like to book a cleaning next Tuesday afternoon" }
   ```
 
-- 呼叫底層 AI 轉錄供應商逾時或失敗，回傳 `503 VOICE_TRANSCRIPTION_UNAVAILABLE`——與 §AI Provider Adapter Contract 對話擷取失敗時靜默 fallback 成澄清樣板不同，轉錄端點的唯一產出就是文字本身，失敗時沒有樣板可以代替，因此明確以 503 告知前端改走文字輸入；文字輸入路徑不受影響，任何時候都完整可用。
-- 底層實作沿用 `internal/ai` 既有的 OpenAI-compatible provider（同一組 `AI_PROVIDER_BASE_URL`／`AI_PROVIDER_API_KEY`），另外要求 `AI_PROVIDER_TRANSCRIPTION_MODEL` 環境變數，缺少時 `cmd/api` 比照其他 AI/clinic 設定直接啟動失敗，不得使用隱性預設值。轉錄請求固定帶 `language=en`，因患者端僅支援英文。**同樣是本階段開發／測試用介接選擇，非正式核准的 production 供應商**；音訊資料涉及的健康資料／隱私協議與 §AI Provider Adapter Contract 所述情況相同，仍待診所核准。
+- If the underlying AI transcription provider times out or fails, return `503 VOICE_TRANSCRIPTION_UNAVAILABLE` — unlike the §AI Provider Adapter Contract's silent fallback to a clarifying template on extraction failure, this endpoint's only output is the text itself, so there's no template to substitute on failure; hence it explicitly returns 503 so the frontend can fall back to text input, which remains fully available at all times.
+- The underlying implementation reuses `internal/ai`'s existing OpenAI-compatible provider (the same `AI_PROVIDER_BASE_URL`/`AI_PROVIDER_API_KEY`), plus a required `AI_PROVIDER_TRANSCRIPTION_MODEL` environment variable; if missing, `cmd/api` fails to start immediately, following the same pattern as the other AI/clinic settings — never an implicit default. Transcription requests always specify `language=en`, since the patient-facing side only supports English. **This is likewise a development/test integration choice for this phase, not an approved production provider**; the health-data/privacy agreements involved for audio data mirror those described in §AI Provider Adapter Contract, and are still pending clinic approval.
 
-Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不預設共用同一 OAuth flow。各 provider 必須使用 least-privilege access，並記錄 credential owner、rotation、revocation、reauthorization 與 tenant/calendar access boundary。
+The Google and Microsoft authorization models must each be validated in sandbox and approved separately; they are not assumed to share the same OAuth flow. Each provider must use least-privilege access, and credential owner, rotation, revocation, reauthorization, and tenant/calendar access boundaries must all be documented.
 
-## 安全與維運底線
+## Security & Operations Baseline
 
-- Production 必須有 TLS、受管理 secrets、加密 storage/backup、point-in-time recovery、員工 SSO/RBAC 與 audit trail。
-- Log、trace、metric 與 alert 不得包含患者訊息、姓名、email、token、Calendar reference 明文或 provider response body。Audit 只使用 entity ID、action、actor ID 與 timestamp。
-- 處理患者資料前必須完成適用的隱私/健康資料審查與 vendor agreement。
-- 每日監控 outbox backlog、`dead_letter`、provider health 與預約衝突；每季進行 access review、backup restore 與 provider outage drill。
+- Production must have TLS, managed secrets, encrypted storage/backups, point-in-time recovery, staff SSO/RBAC, and an audit trail.
+- Logs, traces, metrics, and alerts must never contain patient messages, name, email, tokens, raw calendar references, or provider response bodies. Audit records only use entity ID, action, actor ID, and timestamp.
+- The applicable privacy/health-data review and vendor agreement must be completed before handling patient data.
+- Monitor the outbox backlog, `dead_letter`, provider health, and booking conflicts daily; run access reviews, backup restore tests, and provider outage drills quarterly.
 
-## 待診所確認
+## Pending Clinic Confirmation
 
-1. Clinic IANA timezone、休息時段。營業時間與假日已建立 `clinic_hours`／`clinic_closures` schema（見「Scheduling & Booking Production Data Model」），但實際數值尚待診所提供；資料表可為空，空表時依 fail-closed 規則視為無可預約時段，不得臆測預設值。Slot interval 與最短提前預約時間走必填環境變數，實際數值同樣待診所提供。
-2. Google/Microsoft 授權模式與 tenant 權限——outbox 機制已建置並以 `internal/calendar.SandboxAdapter` 這個不對外發出請求的 fake 運作（見「Outbox／Calendar delivery」），真實 OAuth 串接仍待此項核准後才能開始。Credential storage 已初步決定沿用 `professional_calendars.calendar_ref_ciphertext`（application-layer 加密後存 PostgreSQL）；該 table 尚未建立，將於串接真實 provider 時一併新增。
-3. Outbox retry interval、最大次數與 backoff——目前以必填環境變數 `CALENDAR_OUTBOX_MAX_ATTEMPTS`、`CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS`、`CALENDAR_WORKER_POLL_INTERVAL_SECONDS` 表示，缺少時 `cmd/api`／`cmd/calendar-worker` 直接啟動失敗，實際數值仍待診所提供。`dead_letter` 告警對象與人工處理 SLA 仍未定義——`internal/service/calendar.Service.Reconcile` 目前只回報 backlog，不接任何外部通知系統。
-4. Session 過期時間（`BOOKING_SESSION_TTL_MINUTES` 實際數值）、availability 查詢範圍與 rate-limit 數值；`appointment_idempotency_keys` 24 小時 retention 的過期清除 job 尚未實作，屬已知限制。
+1. Clinic IANA timezone and break periods. Business hours and holidays already have the `clinic_hours`/`clinic_closures` schema in place (see "Scheduling & Booking Production Data Model"), but the actual values are still pending from the clinic; the tables may be empty, in which case, per the fail-closed rule, availability is treated as none — never assume a default schedule. Slot interval and minimum advance-booking time use required environment variables; the actual values are likewise still pending from the clinic.
+2. Google/Microsoft authorization model and tenant permissions — the outbox mechanism is already built and running on `internal/calendar.SandboxAdapter`, a fake that makes no outbound requests (see "Outbox/Calendar Delivery"); the real OAuth integration cannot begin until this item is approved. Credential storage has been provisionally decided as reusing `professional_calendars.calendar_ref_ciphertext` (application-layer encrypted into PostgreSQL); that table has not yet been created and will be added once a real provider is wired up.
+3. Outbox retry interval, max attempts, and backoff — currently represented by the required environment variables `CALENDAR_OUTBOX_MAX_ATTEMPTS`, `CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS`, and `CALENDAR_WORKER_POLL_INTERVAL_SECONDS`, with `cmd/api`/`cmd/calendar-worker` failing to start if any is missing; actual values are still pending from the clinic. Who receives `dead_letter` alerts and the manual-handling SLA are still undefined — `internal/service/calendar.Service.Reconcile` currently only reports the backlog and does not integrate with any external notification system.
+4. Session expiry (the actual `BOOKING_SESSION_TTL_MINUTES` value), the availability query range, and rate-limit values; the 24-hour expiry-cleanup job for `appointment_idempotency_keys` is not yet implemented — this is a known limitation.
 
-## 後端實作前待釐清
+## Open Items Before Backend Implementation
 
-1. ~~BookingSession、Appointment、outbox、idempotency 與 audit 的完整 production schema。~~ 已解決：BookingSession、Appointment、idempotency、audit、`appointment_outbox` 的 schema 已定義於「Scheduling & Booking Production Data Model」。`professional_calendars` schema 已定義但**尚未建立為 migration**——只在串接真實 provider 憑證時才需要。
-2. ~~各 API endpoint 的 request/response schema、必填欄位與完整 status/error mapping。~~ 已解決：見「Scheduling／Booking Endpoint Schemas」。
-3. ~~所有 provider outbox 狀態組合至 `calendarDelivery` 的完整映射。~~ 已解決：見「Outbox／Calendar delivery」章節的映射規則與 `internal/service/calendar.Service.DeliveryStatus`；`POST /appointments` 回應現在含 `calendarDelivery` 欄位。
+1. ~~The full production schema for BookingSession, Appointment, outbox, idempotency, and audit.~~ Resolved: the schema for BookingSession, Appointment, idempotency, audit, and `appointment_outbox` is defined under "Scheduling & Booking Production Data Model." The `professional_calendars` schema is defined but **not yet created as a migration** — it is only needed once a real provider's credentials are wired up.
+2. ~~Each API endpoint's request/response schema, required fields, and complete status/error mapping.~~ Resolved: see "Scheduling/Booking Endpoint Schemas."
+3. ~~The complete mapping from every combination of provider outbox states to `calendarDelivery`.~~ Resolved: see the mapping rules in "Outbox/Calendar Delivery" and `internal/service/calendar.Service.DeliveryStatus`; the `POST /appointments` response now includes a `calendarDelivery` field.

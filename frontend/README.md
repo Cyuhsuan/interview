@@ -1,95 +1,95 @@
-# 前端產品與客戶指南
+# Frontend Product & Client Guide
 
-## 患者將使用的功能
+## What Patients Will Be Able to Do
 
-前端將是一套支援桌面與行動裝置、僅使用英文的 Web 預約客服。患者可打字或使用麥克風；兩種方式都會使用相同的預約對話與後端規則。
+The frontend will be an English-only web booking assistant that supports both desktop and mobile. Patients can type or use the microphone; both paths use the same conversation flow and the same backend rules.
 
-介面只有一個主要任務：協助患者選擇支援的服務，並預約安全且可用的時段。它不得呈現為臨床診斷工具。
+The interface has one primary job: help the patient choose a supported service and book a safe, available time slot. It must never present itself as a clinical diagnostic tool.
 
-## 規劃中的患者流程
+## Planned Patient Flow
 
-1. 選擇或描述 Service A–E。
-2. 查看服務時間與可執行的專業人員類別。
-3. 選擇日期。
-4. 選擇可預約的專業人員與開始時間。
-5. 提供患者姓名與接收行事曆邀請的 email。
-6. 檢查服務、時間長度、專業人員、日期、時間、時區及 email。
-7. 明確確認預約。
-8. 取得預約參考 ID 及行事曆傳送狀態。
+1. Choose or describe Service A–E.
+2. See the service duration and which category of professional can perform it.
+3. Choose a date.
+4. Choose an available professional and start time.
+5. Provide the patient's name and the email that will receive the calendar invite.
+6. Review service, duration, professional, date, time, timezone, and email.
+7. Explicitly confirm the appointment.
+8. Receive a booking reference ID and the calendar-delivery status.
 
-對話中顯示的可預約狀態僅為暫時結果。患者確認時，後端會再次檢查。若時段已被占用，介面必須說明狀態已改變並提供新的選項。
+Availability shown during the conversation is only a provisional result. The backend re-checks it at the moment of confirmation. If a slot has been taken in the meantime, the interface must state that the status changed and offer new options.
 
-## 語音行為
+## Voice Behavior
 
-語音輸入與語音輸出採用不同架構：
+Voice input and voice output use different architectures:
 
-- **語音輸入（speech-to-text）**：瀏覽器用 `MediaRecorder` 錄下患者發話，上傳到本服務後端的 `POST /voice/transcriptions`，由後端呼叫所串接的 AI 轉錄供應商取得文字（見 `backend/README.md`「Voice Transcription Endpoint」）。**這代表患者的錄音會經過本服務後端與該 AI 供應商**，不是單純的瀏覽器端處理；這是刻意的架構決策（取代了更早版本「音訊不進後端」的設計），選擇的理由是可以統一管理轉錄品質與供應商切換，代價是音訊資料現在有一段會流出瀏覽器。
-- **語音輸出（text-to-speech）**：仍使用瀏覽器原生 `speechSynthesis`，不經過後端，不綁定特定供應商——這部分未受本次架構調整影響。
+- **Voice input (speech-to-text)**: the browser uses `MediaRecorder` to record the patient's speech and uploads it to this service's own backend at `POST /voice/transcriptions`, which calls the integrated AI transcription provider to get text back (see "Voice Transcription Endpoint" in `backend/README.md`). **This means the patient's recording passes through this service's backend and that AI provider** — it is not purely browser-side processing. This is a deliberate architectural decision (replacing an earlier design where audio never reached the backend); the trade-off is unified control over transcription quality and the ability to switch providers, at the cost of audio data now leaving the browser for part of the flow.
+- **Voice output (text-to-speech)**: still uses the browser's native `speechSynthesis`, does not go through the backend, and is not tied to any particular provider — this part is unaffected by the architecture change above.
 
-預期限制：
+Expected limitations:
 
-- 不同瀏覽器與作業系統對 `MediaRecorder`／`speechSynthesis` 的支援程度不同。
-- 麥克風權限可能被拒絕或無法使用。
-- 姓名、日期與 email 可能被 AI 轉錄錯誤。
-- 後端轉錄服務逾時或無法使用時，語音輸入會直接失敗並提示改用文字——沒有像聊天回覆那樣的樣板可以代替轉錄結果。
+- Browser and OS support for `MediaRecorder`/`speechSynthesis` varies.
+- Microphone permission may be denied or unavailable.
+- Names, dates, and emails may be mis-transcribed by the AI.
+- If the backend transcription service times out or is unavailable, voice input simply fails and prompts the patient to switch to text — there is no fallback template the way there is for chat replies, because transcription has nothing to substitute.
 
-因此，語音只能是選用功能。執行任何不可逆操作前都必須顯示辨識後的文字；敏感欄位必須可編輯，且預約必須經過明確確認——此處「不可逆操作」指的是最終預約確認，語音輸入送出的每一則訊息仍只是候選值，可在後續對話中修正。
+Because of this, voice must always be optional. Recognized text must be shown before any irreversible action, sensitive fields must remain editable, and the appointment must go through explicit confirmation — "irreversible action" here means the final booking confirmation; every message sent via voice input is still just a candidate value that can be corrected in a later turn of the conversation.
 
-### 第一版實作細節（Chat 模式）
+### Version 1 Implementation Details (Chat Mode)
 
-- 語音功能僅存在於 Chat 對話模式；逐步表單（Wizard）模式不提供語音輸入或朗讀。
-- 語音輸入只擷取單次錄音的最終轉錄結果（不顯示即時的中間辨識文字），並直接以該文字送出訊息，不會停在輸入框等待手動按 Send。錄音結束後會先進入「Transcribing…」狀態等待後端回應，完成後文字才以患者訊息的形式顯示在對話紀錄中；若辨識錯誤，可直接用下一輪文字或語音訊息更正。這項簡化不影響「預約必須經過明確確認」的規則：最終的「Confirm booking」仍是獨立且需要手動點擊的步驟。
-- 「朗讀回覆」為選用開關，預設關閉；使用者需自行開啟才會朗讀機器人回覆。開關狀態僅以布林值存在瀏覽器 localStorage（key: `voice.speakRepliesEnabled`），不會保存任何逐字稿或對話內容。
-- 麥克風不受支援（無 `MediaRecorder`／`getUserMedia`）時，語音輸入按鈕完全不顯示；「朗讀回覆」開關仍會顯示但呈現停用狀態並附註「此瀏覽器不支援」，避免使用者誤以為功能消失是錯誤。
-- 已知缺口：本功能上線時尚未附自動化測試（repo 目前無任何測試框架），僅完成手動與跨瀏覽器驗證；這是既有缺口的延續，非本功能刻意省略，待日後補齊測試基礎建設。
+- Voice features exist only in Chat conversation mode; the step-by-step Wizard mode offers neither voice input nor read-aloud.
+- Voice input only captures the final transcription of a single recording (no live interim transcript is shown), and sends that text as the message immediately rather than waiting in the input box for a manual Send. After recording stops, the UI shows a "Transcribing…" state while waiting for the backend response; once it completes, the text appears in the conversation history as a patient message. If the transcription is wrong, the patient can simply correct it with a following text or voice message. This simplification does not affect the "the appointment must be explicitly confirmed" rule: the final "Confirm booking" step remains separate and requires a manual click.
+- "Speak replies" is an opt-in toggle, off by default; the user must turn it on for bot replies to be read aloud. The toggle state is stored only as a boolean in the browser's `localStorage` (key: `voice.speakRepliesEnabled`) and never persists any transcript or conversation content.
+- When the microphone is unsupported (no `MediaRecorder`/`getUserMedia`), the voice-input button does not render at all; the "Speak replies" toggle still renders but appears disabled with a "not supported in this browser" note, so the user doesn't mistake the missing feature for a bug.
+- Known gap: this feature shipped without automated tests (the repo currently has no test framework at all) — only manual and cross-browser verification has been done. This is a continuation of an existing gap, not something deliberately skipped for this feature, and remains to be addressed once test infrastructure is in place.
 
-### 瀏覽器語音支援對照表
+### Browser Voice Support Matrix
 
-尚待完成手動跨瀏覽器驗證後填入下表（測試日期、版本與結果），驗證前不得假設任何瀏覽器已支援：
+The table below is still pending manual cross-browser verification (test date, version, and result to be filled in); no browser should be assumed supported before that verification happens:
 
-| 瀏覽器 | MediaRecorder（語音輸入） | Speech Synthesis（語音輸出） | 已知問題 |
+| Browser | MediaRecorder (voice input) | Speech Synthesis (voice output) | Known Issues |
 | --- | --- | --- | --- |
-| Chrome（桌面） | 待驗證 | 待驗證 | — |
-| Safari（桌面/iOS） | 待驗證 | 待驗證 | — |
-| Firefox | 待驗證 | 待驗證 | — |
-| Edge | 待驗證 | 待驗證 | — |
+| Chrome (desktop) | pending | pending | — |
+| Safari (desktop/iOS) | pending | pending | — |
+| Firefox | pending | pending | — |
+| Edge | pending | pending | — |
 
-## 服務範圍文案
+## Scope-of-Service Copy
 
-介面可以協助安排標準預約，但必須拒絕：
+The interface can help schedule a standard appointment, but must decline:
 
-- 症狀評估或診斷。
-- 緊急或急症照護判斷。
-- 處方或治療建議。
-- 治療價格、保險範圍或付款。
-- 取消或改期；第一版只提供診所轉接，不執行變更。
+- Symptom assessment or diagnosis.
+- Emergency or acute-care triage decisions.
+- Prescriptions or treatment advice.
+- Treatment pricing, insurance coverage, or payment.
+- Cancellation or rescheduling; version 1 only hands off to the clinic and performs no changes.
 
-上線前，診所必須提供日常聯絡電話、緊急情況文案、營業時間、隱私聲明及支援聯絡方式。
+Before launch, the clinic must supply the everyday contact phone number, emergency-situation copy, business hours, a privacy notice, and support contact information.
 
-## App 外部的客戶設定
+## Client Setup Outside the App
 
-發布 Web 應用程式前，診所必須：
+Before publishing the web application, the clinic must:
 
-1. 確認營業時間、假日、休息時段、slot interval 及提前預約規則。
-2. 選擇診所擁有的 HTTPS domain，例如 `appointments.exampleclinic.com`。
-3. 發布隱私聲明，說明預約資料，以及語音輸入時錄音會傳送到本服務後端與所串接的 AI 轉錄供應商（非單純瀏覽器端處理）。
-4. 確認緊急情況文案及員工電話轉接方式。
-5. 完成經診所核准的 Google Cloud 與 Microsoft Entra sandbox 設定。
-6. 提供 Logo、診所名稱、聯絡資訊及符合無障礙標準的核准色彩。
-7. 在接受真實資料前，使用合成患者資料與 sandbox 行事曆測試。
+1. Confirm business hours, holidays, break periods, slot interval, and advance-booking rules.
+2. Choose a clinic-owned HTTPS domain, e.g. `appointments.exampleclinic.com`.
+3. Publish a privacy notice explaining what booking data is collected, and that voice-input recordings are sent to this service's backend and the integrated AI transcription provider (not purely processed in the browser).
+4. Confirm emergency-situation copy and the staff phone hand-off method.
+5. Complete clinic-approved Google Cloud and Microsoft Entra sandbox setup.
+6. Provide logo, clinic name, contact information, and accessibility-compliant approved colors.
+7. Test with synthetic patient data and sandbox calendars before accepting real data.
 
-## 診所驗收清單
+## Clinic Acceptance Checklist
 
-- A、B 可由三位專業人員執行。
-- C、D、E 絕不顯示 Junior。
-- 六小時服務若會超過關門時間，絕不提供該時段。
-- 可預約時段與重疊檢查只以 PostgreSQL 資料為準；Google 與 Outlook 僅接收已確認預約。
-- 結帳期間被占用的時段會改為提供新選項，不會產生重複預約。
-- 確認後顯示正確服務、人員、時區與時間長度。
-- 「服務範圍文案」所列的拒絕情境（診斷、緊急、處方、報價/保險、取消改期）皆導向核准的轉接文案。
-- 在純文字、純鍵盤、螢幕閱讀器、行動裝置、麥克風遭拒及不支援語音的環境下都可完成預約。
-- 瀏覽器 request、storage 或 production bundle 中不可看見行事曆或 AI credential。
+- A and B can be performed by all three professionals.
+- C, D, and E never show Junior as an option.
+- A six-hour service is never offered a slot that would run past closing time.
+- Available-time and overlap checks rely solely on PostgreSQL data; Google and Outlook only ever receive confirmed appointments.
+- A slot taken during checkout is replaced with new options, never resulting in a double booking.
+- After confirmation, the correct service, professional, timezone, and duration are displayed.
+- Every decline scenario listed under "Scope-of-Service Copy" (diagnosis, emergency, prescription, quote/insurance, cancel/reschedule) leads to the approved hand-off copy.
+- Booking can be completed in text-only, keyboard-only, screen-reader, mobile, microphone-denied, and voice-unsupported environments.
+- No calendar or AI credential is ever visible in browser requests, browser storage, or the production bundle.
 
-## 規劃中的營運指引
+## Planned Operational Guidance
 
-若後端無法從 PostgreSQL 驗證可預約狀態，頁面應請患者稍後重試或聯絡診所，不得猜測。後端產生參考 ID 後，該預約即為已確認；Google／Outlook 傳送狀態須另行顯示，失敗時由 retry、告警與人工處理接續，不得改變預約狀態。
+If the backend cannot verify availability from PostgreSQL, the page should ask the patient to retry later or contact the clinic — it must never guess. Once the backend has issued a reference ID, that appointment is confirmed; Google/Outlook delivery status must be shown separately, and if delivery fails, retry, alerting, and manual follow-up take over without ever changing the appointment's status.

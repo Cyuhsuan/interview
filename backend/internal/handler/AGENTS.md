@@ -1,12 +1,12 @@
-# internal/handler/ 作業規範
+# internal/handler/ Working Conventions
 
-HTTP 轉換層。跨分層不變量見 [`../../AGENTS.md`](../../AGENTS.md)；API contract 見 [`../../README.md`](../../README.md)。
+The HTTP translation layer. See [`../../AGENTS.md`](../../AGENTS.md) for cross-layer invariants; see [`../../README.md`](../../README.md) for the API contract.
 
-## 邊界
+## Boundaries
 
-- 只能 import `gin-gonic/gin` 與 `internal/platform`；不得 import GORM、不得持有 `*gorm.DB`、不得直接呼叫 `internal/repository`。所有資料存取一律透過該模組的 `service`。
-- `handler` 與 `repository` 不得互相依賴，必須經過 `service`（見 [`../service/AGENTS.md`](../service/AGENTS.md)）。
-- 只做 request/response 轉換與輸入格式驗證；不得包含商業規則（資格、時長、availability、狀態轉換判斷一律留在 service）。
-- Response 使用 handler 自訂的 private DTO struct + 明確 `json` tag（camelCase），不得直接回傳 `internal/model` 的結構——model 是持久層資料結構，不是 API 契約。
-- Service 回傳的 sentinel error 用 `errors.Is` 轉換為 `internal/platform/httpproblem` 的錯誤回應；`detail` 欄位依 README「Error Contract」，不得洩漏底層錯誤訊息、SQL 或 stack trace。
-- 每個模組（如 `catalog`）的 `RegisterRoutes(engine *gin.Engine, h *Handler)` 掛載在 `/api/v1` group 下；命名與既有 `catalog`、`health` 模組一致。
+- May only import `gin-gonic/gin` and `internal/platform`; must not import GORM, hold a `*gorm.DB`, or call `internal/repository` directly. All data access goes through that module's `service`.
+- `handler` and `repository` must not depend on each other directly; they must go through `service` (see [`../service/AGENTS.md`](../service/AGENTS.md)).
+- Handlers only do request/response translation and input-format validation; they must not contain business rules (qualification, duration, availability, and state-transition decisions all stay in service).
+- Responses use handler-private DTO structs with explicit `json` tags (camelCase); never return `internal/model` structs directly — model describes persistence-layer data, not the API contract.
+- Sentinel errors returned by services are converted via `errors.Is` into `internal/platform/httpproblem` error responses; the `detail` field follows README's "Error Contract" and must never leak underlying error messages, SQL, or stack traces.
+- Each module's (e.g. `catalog`) `RegisterRoutes(engine *gin.Engine, h *Handler)` mounts under the `/api/v1` group, following the naming used by the existing `catalog` and `health` modules.

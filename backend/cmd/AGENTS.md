@@ -1,10 +1,10 @@
-# cmd/ 作業規範
+# cmd/ Working Conventions
 
-Composition root。跨分層不變量見 [`../AGENTS.md`](../AGENTS.md)；架構與 contract 見 [`../README.md`](../README.md)。
+Composition root. See [`../AGENTS.md`](../AGENTS.md) for cross-layer invariants; see [`../README.md`](../README.md) for architecture and contract.
 
-## 邊界
+## Boundaries
 
-- `go.uber.org/fx` 只能在這裡使用（`cmd/api`、`cmd/calendar-worker`）；`internal/` 下的 business package 不得 import Fx。新模組上線時，在對應 `cmd/*/main.go` 的 `fx.Provide` 依 repository → interface adapter → service → handler 的順序注入，比照 `cmd/api/main.go` 既有寫法；`fx.Invoke` 只用來強制建構單例（如 DB pool ping）與註冊路由/server。
-- `cmd/migrate` 是獨立 CLI，不經過 Fx 或 `internal/platform/httpserver`；它自建 `gorm.Open` 連線，因為 migration/seed 是一次性維運操作，不共用 API process 的 DB pool 生命週期。
-- Migration 與 seed 不得在 `cmd/api` 啟動時自動呼叫；只能透過 `cmd/migrate` 明確執行。
-- Production 環境不得依賴 `godotenv`；缺少必要環境變數時，`cmd/api` 必須直接啟動失敗，不得使用隱性預設值。
+- `go.uber.org/fx` may only be used here (`cmd/api`, `cmd/calendar-worker`); business packages under `internal/` must not import Fx. When wiring up a new module, provide it in the corresponding `cmd/*/main.go`'s `fx.Provide` in the order repository → interface adapter → service → handler, following the existing pattern in `cmd/api/main.go`; `fx.Invoke` is only used to force construction of singletons (e.g. pinging the DB pool) and to register routes/the server.
+- `cmd/migrate` is a standalone CLI that does not go through Fx or `internal/platform/httpserver`; it opens its own `gorm.Open` connection because migration/seeding is a one-off operational action and must not share the API process's DB pool lifecycle.
+- Migrations and seeds must never be invoked automatically on `cmd/api` startup; they may only be run explicitly via `cmd/migrate`.
+- Production must not depend on `godotenv`; if a required environment variable is missing, `cmd/api` must fail to start rather than fall back to an implicit default.

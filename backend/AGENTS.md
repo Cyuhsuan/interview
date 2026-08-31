@@ -1,38 +1,38 @@
-# 後端作業規範
+# Backend Working Conventions
 
-本文件適用於 `backend/`，是跨分層不變量 + 分層文件索引。實作特定功能前，必須先完成 `backend/README.md` 中對應的待釐清 contract。
+This document applies to `backend/`; it is a cross-layer invariants document plus an index of layer-specific docs. Before implementing a specific feature, first resolve the corresponding open contract item in `backend/README.md`.
 
-## 分層文件索引
+## Layer Documentation Index
 
-分層邊界的具體規則（誰能 import 什麼、誰擁有 interface、誰處理 transaction）各自收斂在該層的 `AGENTS.md`，不在本文件重複。修改某一層前，先讀該層文件：
+The concrete rules for each layer's boundaries (who may import what, who owns which interface, who handles transactions) live in that layer's own `AGENTS.md` and are not repeated here. Read the relevant layer doc before touching that layer:
 
-- [`cmd/AGENTS.md`](cmd/AGENTS.md) — composition root 與 CLI。
-- [`internal/handler/AGENTS.md`](internal/handler/AGENTS.md) — HTTP 轉換層。
-- [`internal/service/AGENTS.md`](internal/service/AGENTS.md) — 商業邏輯層。
-- [`internal/repository/AGENTS.md`](internal/repository/AGENTS.md) — PostgreSQL 存取層。
-- [`internal/model/AGENTS.md`](internal/model/AGENTS.md) — 共用資料結構。
-- [`internal/platform/AGENTS.md`](internal/platform/AGENTS.md) — 跨層基礎設施。
-- [`migrations/AGENTS.md`](migrations/AGENTS.md) — schema 變更流程。
+- [`cmd/AGENTS.md`](cmd/AGENTS.md) — composition root and CLI.
+- [`internal/handler/AGENTS.md`](internal/handler/AGENTS.md) — HTTP translation layer.
+- [`internal/service/AGENTS.md`](internal/service/AGENTS.md) — business logic layer.
+- [`internal/repository/AGENTS.md`](internal/repository/AGENTS.md) — PostgreSQL access layer.
+- [`internal/model/AGENTS.md`](internal/model/AGENTS.md) — shared data structures.
+- [`internal/platform/AGENTS.md`](internal/platform/AGENTS.md) — cross-layer infrastructure.
+- [`migrations/AGENTS.md`](migrations/AGENTS.md) — schema-change process.
 
 ## Contract
 
-- `backend/README.md` 是後端架構、資料模型、API 與外部整合的唯一 contract，包含 base path 與版本規則；本文件與各分層文件都不複製 endpoint 或 schema。
-- Public behavior 變更必須同步更新 README。未獲診所核准的設定只能列於「待診所確認」，不得以預設值實作。
+- `backend/README.md` is the single source of truth for backend architecture, data model, API, and external integrations, including the base path and versioning rules; this document and each layer's doc never duplicate endpoints or schemas.
+- Public-behavior changes must be reflected in the README at the same time. Settings not yet approved by the clinic may only be listed under "Pending Clinic Confirmation" and must never be implemented with a default value.
 
-## 跨分層不變量
+## Cross-Layer Invariants
 
-以下規則適用於所有層，違反任一層都視為違反 contract：
+The following rules apply to every layer; violating them at any layer is a contract violation:
 
-- PostgreSQL 是預約、人員、服務、availability 與 audit state 的唯一事實來源；Google Calendar 與 Microsoft Outlook 是只接收資料的外部 projection，任何一層都不得讓它們反向影響 availability 或預約判定。防重疊、狀態機與同步流程依 README「PostgreSQL-first 預約一致性」與「防止重疊與狀態」執行；外部同步失敗不得回滾或刪除已 commit 的預約。
-- UUID、時間、version、ETag、idempotency、status 與 error code 依 README「Canonical Types」定義，不得在任何一層另創格式。
-- Schema 變更必須使用有序、可審閱的 migration，規則見 [`migrations/AGENTS.md`](migrations/AGENTS.md)。
-- Calendar、AI、clock、ID generator 與 repository adapter 必須有 contract test 或 deterministic fake。
-- AI 模型只能理解語言與擷取候選值；預約是否合法一律由 `internal/service` 的確定性程式碼判斷。
+- PostgreSQL is the single source of truth for bookings, staff, services, availability, and audit state; Google Calendar and Microsoft Outlook are write-only external projections — no layer may let them influence availability or booking decisions in reverse. Overlap prevention, the state machine, and the sync flow follow README's "PostgreSQL-first Booking Consistency" and "Preventing Overlap and State"; external sync failures must never roll back or delete a committed booking.
+- UUIDs, time, version, ETag, idempotency, status, and error codes follow the definitions in README's "Canonical Types"; no layer may invent its own format.
+- Schema changes must use ordered, reviewable migrations, per the rules in [`migrations/AGENTS.md`](migrations/AGENTS.md).
+- Calendar, AI, clock, ID-generator, and repository adapters must all have a contract test or a deterministic fake.
+- The AI model may only understand language and extract candidate values; whether a booking is legal is always decided by deterministic code in `internal/service`.
 
-## 驗證
+## Verification
 
-- Unit：資格、時長、營業邊界、假日、半開區間、timezone 與 DST。
-- PostgreSQL integration：重疊 constraint、併發確認、idempotency、transaction、migration 與 seeder。
-- Adapter contract：throttling、timeout、token expiry、部分成功、重複 delivery、retry、`dead_letter` 與 reconciliation。
-- API：限制、ETag、error contract、authorization、CSRF/origin、rate limit 與隱私。
-- 交付前執行適用的 format、static analysis、test、build、migration check、secret scan 與 final diff review；未執行的檢查不得宣稱通過。
+- Unit: qualifications, durations, business-hour boundaries, holidays, half-open intervals, timezone, and DST.
+- PostgreSQL integration: overlap constraints, concurrent confirmation, idempotency, transactions, migrations, and the seeder.
+- Adapter contract: throttling, timeout, token expiry, partial success, duplicate delivery, retry, `dead_letter`, and reconciliation.
+- API: limits, ETag, error contract, authorization, CSRF/origin, rate limiting, and privacy.
+- Before delivery, run the applicable format, static analysis, test, build, migration check, secret scan, and final diff review; never claim a check passed if it was not run.

@@ -1,42 +1,42 @@
-# Repository 作業規範
+# Repository Working Conventions
 
-## 專案目標
+## Project Goal
 
-建立一套僅使用英文、可為牙科診所三位專業人員安排預約的客服聊天機器人。後續實作將使用 Go 建置後端，並使用 React 建置前端。
+Build an English-only customer service chatbot that can schedule appointments for a dental clinic's three professionals. The implementation will use Go for the backend and React for the frontend.
 
-產品文件基準已完成。目前先補齊 API contract 與 production 資料模型，再依交付順序進入應用程式實作。
+The product documentation baseline is complete. The current focus is filling in the API contract and the production data model before moving into application implementation in delivery order.
 
-## MVP 原則
+## MVP Principle
 
-本專案目前為 MVP：實作範圍以「建議交付階段」當前階段所需為限，不得為未排入階段的需求預先建置抽象層、設定選項或基礎設施。
+This project is currently at MVP stage: implementation scope is limited to what the current "recommended delivery phase" requires. Do not pre-build abstractions, configuration options, or infrastructure for requirements that are not yet scheduled into a phase.
 
-- 不新增目前規則或 API contract 未要求的抽象、介面或設定彈性；有具體需求出現時再擴充。
-- 不為假設性的未來供應商、規模或功能預先設計擴充點；Calendar、AI 供應商等既有的可替換介面已足以支援後續擴充，不需額外預留。
-- 優先採用最直接可行的實作方式；只有在明確重複出現或 contract 明確要求時才抽象化。
-- 上述原則不得凌駕於本文件「不可妥協的產品規則」與各層 `AGENTS.md` 的安全、資料一致性與 fail-closed 要求之上；MVP 是限制新增複雜度，不是降低既有規則的標準。
+- Do not add abstractions, interfaces, or configuration flexibility beyond what the current rules or API contract require; extend only when a concrete need arises.
+- Do not pre-design extension points for hypothetical future vendors, scale, or features; the existing swappable interfaces (Calendar, AI provider, etc.) already support future extension and need no additional headroom reserved in advance.
+- Prefer the most direct viable implementation; abstract only when duplication is clearly recurring or the contract explicitly requires it.
+- The above principles must never override the "Non-negotiable Product Rules" in this document or the security, data-consistency, and fail-closed requirements in each layer's `AGENTS.md`; MVP constrains new complexity, it does not lower existing standards.
 
-## Repository 邊界
+## Repository Boundaries
 
-- `frontend/` 負責患者使用的 React 應用程式、聊天介面、瀏覽器語音體驗、無障礙功能及前端測試。
-- `backend/` 負責 Go API、預約規則、資料持久化、AI 抽象層、行事曆整合、安全控制及後端測試。
-- 在前端或後端開始實作前，必須先記錄並確認跨層 API contract。
-- Google Calendar、Microsoft Graph 與 AI 供應商都必須置於介面之後，確保未來可加入其他系統而不需修改預約規則。
+- `frontend/` owns the patient-facing React application, the chat interface, the in-browser voice experience, accessibility, and frontend tests.
+- `backend/` owns the Go API, booking rules, data persistence, the AI abstraction layer, calendar integration, security controls, and backend tests.
+- The cross-layer API contract must be documented and agreed before implementation begins in either layer.
+- Google Calendar, Microsoft Graph, and the AI provider must all sit behind interfaces so other systems can be added later without changing the booking rules.
 
-修改任一應用程式前，先閱讀所在目錄最近一層的 `AGENTS.md`。
+Before modifying either application, read the nearest `AGENTS.md` in that directory.
 
-## 不可妥協的產品規則
+## Non-negotiable Product Rules
 
-- 患者端語言僅使用英文。
-- 服務時長與可執行人員資格以根目錄 README「診所模型」表為準，不得在其他文件另訂數值。
-- Bot 可以安排預約，但不得診斷、開立處方、提供緊急醫療建議、報價或處理保險。第一版不得取消或改期預約；相關要求必須轉接診所。
-- 可預約時間只以 PostgreSQL 中的服務時間、專業人員資格、診所營業時間、內部保留時段與已確認預約判斷；Google Calendar 與 Outlook 不得作為 availability 輸入，且患者正式確認前必須再次從 PostgreSQL 檢查。
-- 若無法從 PostgreSQL 驗證即時可預約狀態，系統必須採 fail-closed，並引導患者聯絡診所。
-- AI 模型可以理解語言，但預約是否合法必須由確定性的後端程式碼判斷。
+- Patient-facing language is English only.
+- Service durations and which professionals are qualified to perform them are governed by the "Clinic Model" table in the root README; no other document may define different values.
+- The bot can schedule appointments but must not diagnose, prescribe, give emergency medical advice, quote prices, or handle insurance. Version 1 must not cancel or reschedule appointments; such requests must be handed off to the clinic.
+- Available times may only be determined from service durations, professional qualifications, clinic business hours, internal blocked slots, and confirmed appointments in PostgreSQL; Google Calendar and Outlook must never be used as availability inputs, and availability must be re-checked from PostgreSQL again immediately before the patient's final confirmation.
+- If real-time availability cannot be verified from PostgreSQL, the system must fail closed and direct the patient to contact the clinic.
+- The AI model may understand language, but whether a booking is valid must be decided by deterministic backend code.
 
-## 交付順序
+## Delivery Order
 
-交付階段與各階段完成條件見根目錄 README「建議交付階段」，本文件不重複列出。
+See the root README's "Recommended Delivery Phases" for the delivery phases and their completion criteria; this document does not repeat them.
 
-## 文件標準
+## Documentation Standards
 
-文件必須針對明確讀者撰寫、列出假設，並清楚區分「已實作」與「規劃中」。避免宣傳式或空泛內容。若未說明限制，不得把 demo credential、本機檔案、瀏覽器語音或同步式行事曆寫入描述成 production-ready。
+Documentation must be written for a clearly identified reader, must state its assumptions, and must clearly distinguish "implemented" from "planned." Avoid promotional or vague content. Unless limitations are explicitly stated, demo credentials, local files, browser-based voice, and synchronous calendar integration must never be described as production-ready.

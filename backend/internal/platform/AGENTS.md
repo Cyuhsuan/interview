@@ -1,12 +1,12 @@
-# internal/platform/ 作業規範
+# internal/platform/ Working Conventions
 
-跨層基礎設施（`config`、`database`、`httpproblem`、`httpserver`、`idgen`）。跨分層不變量見 [`../../AGENTS.md`](../../AGENTS.md)；技術棧邊界見 [`../../README.md`](../../README.md)「技術棧」。
+Cross-layer infrastructure (`config`, `database`, `httpproblem`, `httpserver`, `idgen`). See [`../../AGENTS.md`](../../AGENTS.md) for cross-layer invariants; see the "Tech Stack" section of [`../../README.md`](../../README.md) for stack boundaries.
 
-## 邊界
+## Boundaries
 
-- `database`：唯一建立 `*gorm.DB` 的地方，透過 Fx lifecycle（`OnStart` ping、`OnStop` close）管理單例連線池。其他任何 package（包含 `internal/repository`）都不得自行建立第二個連線池，只能接受注入。
-- `config`：`Load()` 是所有環境變數讀取的唯一入口；`CLINIC_TIMEZONE`（需通過 `time.LoadLocation` 驗證）與 `DATABASE_URL` 缺少或無效時必須回傳 error 讓啟動失敗，不得用隱性預設值放行。`godotenv.Load()` 只能在 `APP_ENV != "production"` 時呼叫。
-- `httpproblem`：所有 error response 必須經過這裡的 `Write`／`WriteInternal`，格式對應 README「Error Contract」。`WriteInternal` 不得把 `err.Error()` 洩漏進回應 body；新增 error code 常數時同步核對 README 的 HTTP status 對照表，不得自創未列在 README 的 code。
-- `httpserver`：`NewEngine()`／`RegisterServer()` 只做 Gin engine 組裝與 Fx lifecycle 綁定的 listen/shutdown，不掛載任何業務路由——路由註冊留給各模組的 `internal/handler/*/RegisterRoutes`。
-- `idgen`：所有 entity ID 產生的唯一入口，底層必須是 CSPRNG（如 `google/uuid` 的 `NewRandom()`）；不得在其他 package 另行產生 UUID 或使用非 CSPRNG 來源。
-- 本目錄下每個子套件單一職責，不得互相 import 對方的內部細節；跨套件共用時透過 `config.Config` 顯式傳遞。
+- `database`: the only place that creates a `*gorm.DB`; it manages the singleton connection pool via the Fx lifecycle (`OnStart` ping, `OnStop` close). No other package (including `internal/repository`) may create a second connection pool — they may only accept it via injection.
+- `config`: `Load()` is the single entry point for reading all environment variables; if `CLINIC_TIMEZONE` (must pass `time.LoadLocation` validation) or `DATABASE_URL` is missing or invalid, it must return an error that fails startup — never fall back to an implicit default. `godotenv.Load()` may only be called when `APP_ENV != "production"`.
+- `httpproblem`: every error response must go through `Write`/`WriteInternal` here, matching README's "Error Contract" format. `WriteInternal` must never leak `err.Error()` into the response body; when adding a new error-code constant, check it against README's HTTP-status mapping table — never invent a code that isn't listed in README.
+- `httpserver`: `NewEngine()`/`RegisterServer()` only assemble the Gin engine and bind listen/shutdown to the Fx lifecycle; they mount no business routes — route registration is left to each module's `internal/handler/*/RegisterRoutes`.
+- `idgen`: the sole entry point for generating every entity ID; the underlying source must be a CSPRNG (e.g. `google/uuid`'s `NewRandom()`); no other package may generate UUIDs independently or use a non-CSPRNG source.
+- Each subpackage in this directory has a single responsibility and must not import another subpackage's internal details; when sharing across subpackages, pass state explicitly through `config.Config`.
