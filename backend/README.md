@@ -269,9 +269,30 @@ Scope 為 method + route + JWT `sub`（已於 Canonical Types 定義），此表
 
 只存 entity ID、action、actor ID 與 timestamp，符合「安全與維運底線」對 log／audit 的限制；不得寫入患者姓名、email 或訊息內容。
 
-### Outbox／Calendar delivery（規劃中，本階段未實作）
+### `appointment_outbox`
 
-`professional_calendars` 與「PostgreSQL-first 預約一致性」步驟 3–6 所述的 outbox record、`calendarDelivery` 欄位與 `cmd/calendar-worker`，在目前階段（Availability + BookingSession + Appointment，僅 PostgreSQL 寫入）**尚未實作**。`POST /appointments` 成功後不建立任何 outbox row，也不回傳 `calendarDelivery`。此為刻意的階段性範圍限制，不是遺漏；待 Google/Microsoft sandbox 串接（建議交付階段 4）開始時，才需要新增 `appointment_outbox` table 與對應程式碼。
+| Column | Type | Constraint |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `appointment_id` | `uuid` | FK → `appointments.id ON DELETE RESTRICT` |
+| `provider` | `varchar(16)` | Check: `google` or `microsoft` |
+| `status` | `varchar(16)` | Check: `pending`、`processing`、`retryable`、`delivered`、`dead_letter` |
+| `idempotency_key` | `varchar(128)` | Unique；`appt:{appointmentId}:{provider}`，見「PostgreSQL-first 預約一致性」步驟 5 |
+| `attempt_count` | `integer` | Default `0` |
+| `next_attempt_at` | `timestamptz` | Default database current time |
+| `event_reference` | `varchar(512)` | Nullable，adapter 回傳的 provider event reference |
+| `last_error` | `varchar(500)` | Nullable，經 sanitize 的失敗原因，不得含 provider response body（見「安全與維運底線」） |
+| `created_at`、`updated_at` | `timestamptz` | Default database current time |
+
+(`appointment_id`, `provider`) 必須 unique——每筆 appointment 每個 provider 恰有一筆 outbox row。`internal/service/booking` 在確認 appointment 的同一 transaction 內建立 google、microsoft 各一筆 `pending` row；`internal/service/calendar`／`cmd/calendar-worker` 依「PostgreSQL-first 預約一致性」步驟 5–6 推進其餘狀態，不改變 appointment 狀態。
+
+### Outbox／Calendar delivery（已實作：outbox 機制 + sandbox adapter；真實 Google/Microsoft OAuth 尚未串接）
+
+`POST /appointments` 成功後，在同一 transaction 內為 google、microsoft 各建立一筆 `appointment_outbox` pending row，並於回應中加入 `calendarDelivery=queued`（見下方 endpoint schema）。`cmd/calendar-worker` 輪詢到期 row，鎖定並標記 `processing` 後 commit，再呼叫 `internal/service/calendar.Adapter.Create`；成功寫回 `delivered` 與 `event_reference`，暫時性失敗依 `CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS`（指數退避）標記 `retryable` 並排入 `next_attempt_at`，達到 `CALENDAR_OUTBOX_MAX_ATTEMPTS` 或永久性失敗則標記 `dead_letter`。`calendarDelivery` 由 `internal/service/calendar.Service.DeliveryStatus` 即時查詢兩筆 outbox row 計算，不快取：兩者皆 `delivered` 才是 `delivered`；一方 `delivered` 為 `partial`；任一方 `dead_letter` 為 `attentionRequired`；其餘為 `queued`。外部寫入失敗不回滾或刪除已 commit 的 appointment，符合「PostgreSQL-first 預約一致性」。
+
+目前唯一的 `Adapter` 實作是 `internal/calendar.SandboxAdapter`：一個不對外發出任何網路請求的 deterministic fake，回傳 `sandbox:{provider}:{idempotencyKey}` 作為 event reference。這是為了在真實 OAuth 授權模式核准前，先把 outbox schema、worker、retry/dead_letter 狀態機與 `calendarDelivery` 映射建置並測試完成；**它不是 Google 或 Microsoft Calendar 的真實整合，不得對外宣稱為 production-ready Calendar sync**。`professional_calendars` table（見上方 schema）尚未建立——它只在接上真實 provider 憑證時才需要，目前的 sandbox worker 不查詢也不依賴它。真實整合待「Google/Microsoft 授權模式、tenant 權限與 credential storage」（見「待診所確認」第 2 項）核准後才能開始：屆時的 credential 儲存方式已初步決定為 application-layer 加密後存入 `professional_calendars.calendar_ref_ciphertext`（沿用既有欄位設計），但實際 OAuth flow、tenant 權限與該 table 的建立仍待 sandbox 驗證與診所核准。
+
+Reconciliation 目前僅提供 `internal/service/calendar.Service.Reconcile`，回傳目前的 `dead_letter` backlog 供呼叫端記錄／告警；實際告警對象與人工處理 SLA 仍待診所確認（見「待診所確認」第 3 項），因此這裡刻意不接任何外部通知系統。
 
 ## Reference-data Seeder
 
@@ -429,7 +450,7 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 { "bookingSessionId": "3fa85f64-5717-4562-b3fc-2c963f66afa6" }
 ```
 
-成功時在單一 transaction 內重新驗證 slot 可用性、建立 `appointments` row、`appointment_idempotency_keys` row 與 `appointment_audit_log` row，session 轉為 `confirmed`；回傳 `201`：
+成功時在單一 transaction 內重新驗證 slot 可用性、建立 `appointments` row、`appointment_idempotency_keys` row、`appointment_audit_log` row 與 google／microsoft 各一筆 `appointment_outbox` pending row，session 轉為 `confirmed`；回傳 `201`：
 
 ```json
 {
@@ -440,11 +461,12 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
   "patientEmail": "jane@example.com",
   "start": "2026-09-02T09:00:00+08:00",
   "end": "2026-09-02T10:00:00+08:00",
-  "timeZone": "Asia/Taipei"
+  "timeZone": "Asia/Taipei",
+  "calendarDelivery": "queued"
 }
 ```
 
-回應**不含 `calendarDelivery`**——outbox 尚未實作（見「Outbox／Calendar delivery」章節），待該功能落地後才會在此新增此欄位，不得提前回傳假值。Session 非 `readyToConfirm` 狀態時回傳 `422 VALIDATION_FAILED`；slot 已被搶走（exclusion constraint 衝突）回傳 `409 SLOT_NO_LONGER_AVAILABLE`；`Idempotency-Key` 重複且 request hash 不同回傳 `409 IDEMPOTENCY_KEY_REUSED`；重複且 hash 相同回放原本的 status/body。
+`calendarDelivery` 剛確認時一律為 `queued`；同一 `Idempotency-Key`／`request_hash` 的重放請求會即時查詢兩筆 outbox row 目前狀態，可能回傳 `queued`、`partial`、`delivered` 或 `attentionRequired`（見「Outbox／Calendar delivery」章節的映射規則），不是固定值。Session 非 `readyToConfirm` 狀態時回傳 `422 VALIDATION_FAILED`；slot 已被搶走（exclusion constraint 衝突）回傳 `409 SLOT_NO_LONGER_AVAILABLE`；`Idempotency-Key` 重複且 request hash 不同回傳 `409 IDEMPOTENCY_KEY_REUSED`；重複且 hash 相同回放原本的 status/body。
 
 `POST /booking-sessions/{id}/messages`（不需要 `If-Match`——這個 endpoint 內部讀取 session 目前 version 並套用變更，不對外暴露樂觀鎖）傳送一則英文患者訊息：
 
@@ -479,7 +501,9 @@ Rate-limit 數值由環境設定，未設定時 production 不得啟動；超限
 
 ## Calendar Adapter Contract
 
-Provider-neutral ports 只負責將 PostgreSQL appointment 投影至外部系統，第一版支援 `Create`、health、retry classification 與 reconciliation；不提供 `Busy`、`Update` 或 `Cancel`。
+Provider-neutral port（`internal/service/calendar.Adapter`）只負責將 PostgreSQL appointment 投影至外部系統，第一版支援 `Create`、health、retry classification（`internal/service/calendar.RetryableError` 區分暫時性與永久性失敗）與 reconciliation（`Service.Reconcile` 回報 `dead_letter` backlog）；不提供 `Busy`、`Update` 或 `Cancel`。
+
+目前唯一的具體實作是 `internal/calendar.SandboxAdapter`——一個不對外發出任何請求的 deterministic fake，用於在真實 OAuth 授權模式核准前先建置並測試 outbox／worker／retry 狀態機（見「Outbox／Calendar delivery」章節）。它不是 Google 或 Microsoft 的正式整合。
 
 ## AI Provider Adapter Contract
 
@@ -516,12 +540,12 @@ Google 與 Microsoft 授權模式必須分別在 sandbox 驗證後核准，不�
 ## 待診所確認
 
 1. Clinic IANA timezone、休息時段。營業時間與假日已建立 `clinic_hours`／`clinic_closures` schema（見「Scheduling & Booking Production Data Model」），但實際數值尚待診所提供；資料表可為空，空表時依 fail-closed 規則視為無可預約時段，不得臆測預設值。Slot interval 與最短提前預約時間走必填環境變數，實際數值同樣待診所提供。
-2. Google/Microsoft 授權模式、tenant 權限與 credential storage。
-3. Outbox retry interval、最大次數、`dead_letter` 告警對象與人工處理 SLA——待 outbox／Calendar delivery 實際開發時一併確認（見下方「已解決」註記）。
+2. Google/Microsoft 授權模式與 tenant 權限——outbox 機制已建置並以 `internal/calendar.SandboxAdapter` 這個不對外發出請求的 fake 運作（見「Outbox／Calendar delivery」），真實 OAuth 串接仍待此項核准後才能開始。Credential storage 已初步決定沿用 `professional_calendars.calendar_ref_ciphertext`（application-layer 加密後存 PostgreSQL）；該 table 尚未建立，將於串接真實 provider 時一併新增。
+3. Outbox retry interval、最大次數與 backoff——目前以必填環境變數 `CALENDAR_OUTBOX_MAX_ATTEMPTS`、`CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS`、`CALENDAR_WORKER_POLL_INTERVAL_SECONDS` 表示，缺少時 `cmd/api`／`cmd/calendar-worker` 直接啟動失敗，實際數值仍待診所提供。`dead_letter` 告警對象與人工處理 SLA 仍未定義——`internal/service/calendar.Service.Reconcile` 目前只回報 backlog，不接任何外部通知系統。
 4. Session 過期時間（`BOOKING_SESSION_TTL_MINUTES` 實際數值）、availability 查詢範圍與 rate-limit 數值；`appointment_idempotency_keys` 24 小時 retention 的過期清除 job 尚未實作，屬已知限制。
 
 ## 後端實作前待釐清
 
-1. ~~BookingSession、Appointment、outbox、idempotency 與 audit 的完整 production schema。~~ 已解決：BookingSession、Appointment、idempotency、audit 的 schema 已定義於「Scheduling & Booking Production Data Model」。**Outbox schema 刻意延後**——目前階段不建立 `appointment_outbox` table，待 Calendar 整合（建議交付階段 4）開始時再補。
+1. ~~BookingSession、Appointment、outbox、idempotency 與 audit 的完整 production schema。~~ 已解決：BookingSession、Appointment、idempotency、audit、`appointment_outbox` 的 schema 已定義於「Scheduling & Booking Production Data Model」。`professional_calendars` schema 已定義但**尚未建立為 migration**——只在串接真實 provider 憑證時才需要。
 2. ~~各 API endpoint 的 request/response schema、必填欄位與完整 status/error mapping。~~ 已解決：見「Scheduling／Booking Endpoint Schemas」。
-3. ~~所有 provider outbox 狀態組合至 `calendarDelivery` 的完整映射。~~ 延後：`calendarDelivery` 欄位與其對應的 outbox 狀態映射，待 outbox 實際實作時一併定義；目前 `POST /appointments` 回應不含此欄位。
+3. ~~所有 provider outbox 狀態組合至 `calendarDelivery` 的完整映射。~~ 已解決：見「Outbox／Calendar delivery」章節的映射規則與 `internal/service/calendar.Service.DeliveryStatus`；`POST /appointments` 回應現在含 `calendarDelivery` 欄位。

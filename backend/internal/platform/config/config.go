@@ -44,6 +44,15 @@ type Config struct {
 	// Transcription Endpoint" — rather than introducing a separate
 	// credential set for a hypothetical different provider.
 	AIProviderTranscriptionModel string
+
+	// Calendar outbox worker (internal/service/calendar, cmd/calendar-worker).
+	// Retry interval, max attempts and the dead_letter alert target/SLA are
+	// still pending clinic confirmation (README's 待診所確認 item 3), so
+	// these fail closed with no implicit default, same as the scheduling
+	// parameters above.
+	CalendarOutboxMaxAttempts         int
+	CalendarOutboxRetryBackoffSeconds int
+	CalendarWorkerPollIntervalSeconds int
 }
 
 func Load() (Config, error) {
@@ -114,6 +123,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.AIProviderTranscriptionModel, err = requiredStringEnv("AI_PROVIDER_TRANSCRIPTION_MODEL"); err != nil {
+		return Config{}, err
+	}
+
+	if cfg.CalendarOutboxMaxAttempts, err = requiredPositiveIntEnv("CALENDAR_OUTBOX_MAX_ATTEMPTS"); err != nil {
+		return Config{}, err
+	}
+	if cfg.CalendarOutboxRetryBackoffSeconds, err = requiredPositiveIntEnv("CALENDAR_OUTBOX_RETRY_BACKOFF_SECONDS"); err != nil {
+		return Config{}, err
+	}
+	if cfg.CalendarWorkerPollIntervalSeconds, err = requiredPositiveIntEnv("CALENDAR_WORKER_POLL_INTERVAL_SECONDS"); err != nil {
 		return Config{}, err
 	}
 

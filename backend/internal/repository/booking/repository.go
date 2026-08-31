@@ -146,3 +146,13 @@ func (t *txRepository) InsertAuditLog(ctx context.Context, rec model.Appointment
 	}
 	return nil
 }
+
+func (t *txRepository) InsertOutboxRecords(ctx context.Context, records []model.AppointmentOutbox) error {
+	if len(records) == 0 {
+		return nil
+	}
+	if err := t.db.WithContext(ctx).Create(&records).Error; err != nil {
+		return fmt.Errorf("insert outbox records: %w", err)
+	}
+	return nil
+}

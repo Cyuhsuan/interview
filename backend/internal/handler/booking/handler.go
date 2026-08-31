@@ -18,6 +18,7 @@ import (
 	"backend/internal/model"
 	"backend/internal/platform/httpproblem"
 	bookingsvc "backend/internal/service/booking"
+	calendarsvc "backend/internal/service/calendar"
 	catalogsvc "backend/internal/service/catalog"
 )
 
@@ -36,14 +37,15 @@ type sessionResponse struct {
 }
 
 type appointmentResponse struct {
-	ID             string `json:"id"`
-	ServiceCode    string `json:"serviceCode"`
-	ProfessionalID string `json:"professionalId"`
-	PatientName    string `json:"patientName"`
-	PatientEmail   string `json:"patientEmail"`
-	Start          string `json:"start"`
-	End            string `json:"end"`
-	TimeZone       string `json:"timeZone"`
+	ID               string `json:"id"`
+	ServiceCode      string `json:"serviceCode"`
+	ProfessionalID   string `json:"professionalId"`
+	PatientName      string `json:"patientName"`
+	PatientEmail     string `json:"patientEmail"`
+	Start            string `json:"start"`
+	End              string `json:"end"`
+	TimeZone         string `json:"timeZone"`
+	CalendarDelivery string `json:"calendarDelivery"`
 }
 
 type slotRequest struct {
@@ -66,12 +68,13 @@ type confirmAppointmentRequest struct {
 }
 
 type Handler struct {
-	service *bookingsvc.Service
-	catalog *catalogsvc.Service
+	service  *bookingsvc.Service
+	catalog  *catalogsvc.Service
+	calendar *calendarsvc.Service
 }
 
-func NewHandler(service *bookingsvc.Service, catalog *catalogsvc.Service) *Handler {
-	return &Handler{service: service, catalog: catalog}
+func NewHandler(service *bookingsvc.Service, catalog *catalogsvc.Service, calendar *calendarsvc.Service) *Handler {
+	return &Handler{service: service, catalog: catalog, calendar: calendar}
 }
 
 func RegisterRoutes(engine *gin.Engine, h *Handler) {
@@ -205,15 +208,21 @@ func (h *Handler) confirmAppointment(c *gin.Context) {
 		httpproblem.WriteInternal(c, err)
 		return
 	}
+	calendarDelivery, err := h.calendar.DeliveryStatus(c.Request.Context(), appt.ID)
+	if err != nil {
+		httpproblem.WriteInternal(c, err)
+		return
+	}
 	c.JSON(http.StatusCreated, appointmentResponse{
-		ID:             appt.ID,
-		ServiceCode:    derefOrEmpty(serviceCode),
-		ProfessionalID: appt.ProfessionalID,
-		PatientName:    appt.PatientName,
-		PatientEmail:   appt.PatientEmail,
-		Start:          appt.StartAt.Format(time.RFC3339),
-		End:            appt.EndAt.Format(time.RFC3339),
-		TimeZone:       appt.TimeZone,
+		ID:               appt.ID,
+		ServiceCode:      derefOrEmpty(serviceCode),
+		ProfessionalID:   appt.ProfessionalID,
+		PatientName:      appt.PatientName,
+		PatientEmail:     appt.PatientEmail,
+		Start:            appt.StartAt.Format(time.RFC3339),
+		End:              appt.EndAt.Format(time.RFC3339),
+		TimeZone:         appt.TimeZone,
+		CalendarDelivery: calendarDelivery,
 	})
 }
 

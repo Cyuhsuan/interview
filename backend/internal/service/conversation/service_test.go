@@ -82,6 +82,9 @@ func (t *fakeTx) InsertAppointment(ctx context.Context, appt model.Appointment) 
 func (t *fakeTx) InsertAuditLog(ctx context.Context, rec model.AppointmentAuditLog) error {
 	return nil
 }
+func (t *fakeTx) InsertOutboxRecords(ctx context.Context, records []model.AppointmentOutbox) error {
+	return nil
+}
 
 type fakeBookingRepo struct {
 	sessions map[string]model.BookingSession

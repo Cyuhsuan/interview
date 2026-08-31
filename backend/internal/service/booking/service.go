@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"backend/internal/model"
+	calendarsvc "backend/internal/service/calendar"
 	catalogsvc "backend/internal/service/catalog"
 	schedulingsvc "backend/internal/service/scheduling"
 )
@@ -87,6 +88,11 @@ type TxRepository interface {
 	InsertIdempotencyKey(ctx context.Context, rec model.AppointmentIdempotencyKey) error
 	InsertAppointment(ctx context.Context, appt model.Appointment) error
 	InsertAuditLog(ctx context.Context, rec model.AppointmentAuditLog) error
+	// InsertOutboxRecords persists the Google/Microsoft outbox rows created
+	// alongside the appointment, per README step 3. It contains no business
+	// rules — internal/service/calendar owns the delivery state machine
+	// those rows subsequently go through.
+	InsertOutboxRecords(ctx context.Context, records []model.AppointmentOutbox) error
 }
 
 // Repository provides both the simple session CRUD used by the
@@ -378,6 +384,35 @@ func fromSnapshot(s appointmentSnapshot) model.Appointment {
 	}
 }
 
+// newOutboxRecords builds the Google and Microsoft outbox rows README step
+// 3 requires alongside every confirmed appointment. Both are always created
+// regardless of whether a professional's real provider mapping exists yet
+// — README's fail-closed rule governs availability, not calendar delivery,
+// and an undeliverable row surfaces as calendarDelivery=attentionRequired
+// once it exhausts retries, per "外部同步失敗不得回滾或刪除已 commit 的預約".
+func (s *Service) newOutboxRecords(appointmentID string, now time.Time) ([]model.AppointmentOutbox, error) {
+	providers := []string{model.CalendarProviderGoogle, model.CalendarProviderMicrosoft}
+	records := make([]model.AppointmentOutbox, 0, len(providers))
+	for _, provider := range providers {
+		id, err := s.ids.NewID()
+		if err != nil {
+			return nil, fmt.Errorf("generate outbox id: %w", err)
+		}
+		records = append(records, model.AppointmentOutbox{
+			ID:             id,
+			AppointmentID:  appointmentID,
+			Provider:       provider,
+			Status:         model.OutboxStatusPending,
+			IdempotencyKey: calendarsvc.OutboxIdempotencyKey(appointmentID, provider),
+			AttemptCount:   0,
+			NextAttemptAt:  now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		})
+	}
+	return records, nil
+}
+
 // ConfirmAppointment implements README's "PostgreSQL-first 預約一致性"
 // steps 1-4 for the PostgreSQL-only portion of appointment confirmation
 // (steps 5-6, the outbox delivery worker, are not implemented yet).
@@ -469,6 +504,14 @@ func (s *Service) ConfirmAppointment(ctx context.Context, sessionID string, ifMa
 			ID: auditID, EntityID: appt.ID, Action: "appointment.confirmed", ActorID: "system", CreatedAt: now,
 		}); err != nil {
 			return fmt.Errorf("insert audit log: %w", err)
+		}
+
+		outboxRecords, err := s.newOutboxRecords(appt.ID, now)
+		if err != nil {
+			return err
+		}
+		if err := tx.InsertOutboxRecords(ctx, outboxRecords); err != nil {
+			return fmt.Errorf("insert outbox records: %w", err)
 		}
 
 		responseBody, err := json.Marshal(toSnapshot(appt))

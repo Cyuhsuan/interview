@@ -7,20 +7,24 @@ import (
 	"gorm.io/gorm"
 
 	"backend/internal/ai"
+	calendarAdapter "backend/internal/calendar"
 	bookingHandler "backend/internal/handler/booking"
 	catalogHandler "backend/internal/handler/catalog"
 	conversationHandler "backend/internal/handler/conversation"
 	"backend/internal/handler/health"
 	schedulingHandler "backend/internal/handler/scheduling"
 	voiceHandler "backend/internal/handler/voice"
+	"backend/internal/model"
 	"backend/internal/platform/config"
 	"backend/internal/platform/database"
 	"backend/internal/platform/httpserver"
 	"backend/internal/platform/idgen"
 	bookingRepo "backend/internal/repository/booking"
+	calendarRepo "backend/internal/repository/calendar"
 	catalogRepo "backend/internal/repository/catalog"
 	schedulingRepo "backend/internal/repository/scheduling"
 	bookingService "backend/internal/service/booking"
+	calendarService "backend/internal/service/calendar"
 	catalogService "backend/internal/service/catalog"
 	conversationService "backend/internal/service/conversation"
 	schedulingService "backend/internal/service/scheduling"
@@ -81,6 +85,26 @@ func newTranscriptionHandler(service *transcriptionService.Service) *voiceHandle
 	return voiceHandler.NewHandler(service)
 }
 
+func newCalendarAdapters() map[string]calendarService.Adapter {
+	sandbox := calendarAdapter.NewSandboxAdapter()
+	return map[string]calendarService.Adapter{
+		model.CalendarProviderGoogle:    sandbox,
+		model.CalendarProviderMicrosoft: sandbox,
+	}
+}
+
+func newCalendarService(
+	repo calendarService.OutboxRepository,
+	adapters map[string]calendarService.Adapter,
+	cfg config.Config,
+) *calendarService.Service {
+	return calendarService.NewService(
+		repo, adapters,
+		cfg.CalendarOutboxMaxAttempts,
+		time.Duration(cfg.CalendarOutboxRetryBackoffSeconds)*time.Second,
+	)
+}
+
 func newBookingService(
 	repo *bookingRepo.Repository,
 	catalog *catalogService.Service,
@@ -113,6 +137,11 @@ func main() {
 			schedulingRepo.NewRepository,
 			newSchedulingService,
 			newSchedulingHandler,
+
+			calendarRepo.NewRepository,
+			func(r *calendarRepo.Repository) calendarService.OutboxRepository { return r },
+			newCalendarAdapters,
+			newCalendarService,
 
 			bookingRepo.NewRepository,
 			newBookingService,

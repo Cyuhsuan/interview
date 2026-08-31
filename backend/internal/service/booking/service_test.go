@@ -80,6 +80,7 @@ type fakeTx struct {
 	idempotency  map[string]model.AppointmentIdempotencyKey
 	appointments map[string]model.Appointment
 	audits       []model.AppointmentAuditLog
+	outbox       []model.AppointmentOutbox
 	slotTaken    bool
 }
 
@@ -127,6 +128,11 @@ func (t *fakeTx) InsertAppointment(ctx context.Context, appt model.Appointment) 
 
 func (t *fakeTx) InsertAuditLog(ctx context.Context, rec model.AppointmentAuditLog) error {
 	t.audits = append(t.audits, rec)
+	return nil
+}
+
+func (t *fakeTx) InsertOutboxRecords(ctx context.Context, records []model.AppointmentOutbox) error {
+	t.outbox = append(t.outbox, records...)
 	return nil
 }
 
